@@ -1,0 +1,3 @@
+config load /home/elio/code/rr2/rr2.ioc
+project generate
+exit
