@@ -15,7 +15,11 @@ project(${CMAKE_PROJECT_NAME})
 message("Build type: " ${CMAKE_BUILD_TYPE})
 
 enable_language(C ASM)
-add_executable(${CMAKE_PROJECT_NAME})
+add_executable(${CMAKE_PROJECT_NAME}
+    Device/dji_motor.c
+    Device/dji_motor.h
+    Algorithm/pid.c
+    Algorithm/pid.h)
 
 add_subdirectory(cmake/stm32cubemx)
 
