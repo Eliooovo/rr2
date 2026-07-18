@@ -19,7 +19,9 @@ add_executable(${CMAKE_PROJECT_NAME}
     Device/dji_motor.c
     Device/dji_motor.h
     Algorithm/pid.c
-    Algorithm/pid.h)
+    Algorithm/pid.h
+    Modules/chassis.c
+    Modules/chassis.h)
 
 add_subdirectory(cmake/stm32cubemx)
 

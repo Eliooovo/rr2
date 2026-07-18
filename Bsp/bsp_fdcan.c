@@ -255,7 +255,8 @@ void fdcan1_rx_callback(void)
     if (fdcanx_receive(&hfdcan1, &rec_id1, rx_data1) == 8U)
     {
         /* 将 CAN 帧数据 + ID + 时间戳送入 DJI 电机驱动解析 */
-        (void)DjiMotor_HandleFeedback(rec_id1, rx_data1, HAL_GetTick());
+        (void)DjiMotor_HandleFeedback(rec_id1, rx_data1, HAL_GetTick());//这就是接收链路的最后一段——把 CAN 硬件收到的原始字节，交给 DjiMotor_HandleFeedback() 解析成 encoder/speed_rpm/temperature
+                                                                                            // 等结构化数据，更新到 g_dji_motors[]。
     }
 }
 
