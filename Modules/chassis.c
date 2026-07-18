@@ -5,7 +5,7 @@
  * 数据流:
  *   上位机 → SetVelocityRpm(vx,vy,wz) → 麦轮解算 → 目标转速
  *   C620 反馈 → DjiMotor_HandleFeedback → g_dji_motors[].speed_rpm (中断上下文)
- *   ControlLoop: 目标转速 vs 实际转速 → PID → SetCurrent → CAN 0x200 发送
+ *   ControlLoop: 目标转速 vs 实际转速 → PID → SetCurrent → CAN 发送
  */
 
 #include "chassis.h"
@@ -14,25 +14,10 @@
 #include "dji_motor.h"
 #include "pid.h"
 
-/* PID 参数 — 速度环，需根据实际负载整定 */
-#define CHASSIS_SPEED_PID_KP       6.0f
-#define CHASSIS_SPEED_PID_KI       1.0f
-#define CHASSIS_SPEED_PID_KD       0.05f
-#define CHASSIS_CURRENT_LIMIT      12000.0f    /* 输出限幅，C620 最大 16384 */
-#define CHASSIS_INTEGRAL_LIMIT     6000.0f
-#define CHASSIS_OFFLINE_TIMEOUT_MS 100U        /* 超过此时间无反馈视为离线 */
 
-/* 底盘电机映射: 电机 ID 1,2,3,4 对应 FDCAN1 上的四个轮子 */
-static const uint8_t s_motor_ids[CHASSIS_MOTOR_COUNT] = {
-    CHASSIS_MOTOR_ID_1, CHASSIS_MOTOR_ID_2,
-    CHASSIS_MOTOR_ID_3, CHASSIS_MOTOR_ID_4,
-};
 
-/* 方向系数: 试车发现某轮反转时，在 chassis.h 改对应的 DIR 为 -1 */
-static const int8_t s_motor_dirs[CHASSIS_MOTOR_COUNT] = {
-    CHASSIS_MOTOR_DIR_1, CHASSIS_MOTOR_DIR_2,
-    CHASSIS_MOTOR_DIR_3, CHASSIS_MOTOR_DIR_4,
-};
+static const ChassisMotorConfig s_motor_config[CHASSIS_MOTOR_COUNT] =
+    CHASSIS_MOTOR_CONFIG_INIT;
 
 static PidController s_speed_pid[CHASSIS_MOTOR_COUNT];
 static float        s_target_rpm[CHASSIS_MOTOR_COUNT];
@@ -54,7 +39,9 @@ void Chassis_Init(void)
 {
     for (uint8_t i = 0U; i < CHASSIS_MOTOR_COUNT; ++i) {
         Pid_Init(&s_speed_pid[i],
-                 CHASSIS_SPEED_PID_KP, CHASSIS_SPEED_PID_KI, CHASSIS_SPEED_PID_KD,
+                 s_motor_config[i].speed_kp,
+                 s_motor_config[i].speed_ki,
+                 s_motor_config[i].speed_kd,
                  -CHASSIS_CURRENT_LIMIT,  CHASSIS_CURRENT_LIMIT,
                  -CHASSIS_INTEGRAL_LIMIT, CHASSIS_INTEGRAL_LIMIT);
         s_target_rpm[i] = 0.0f;
@@ -79,7 +66,7 @@ void Chassis_Stop(void)
     for (uint8_t i = 0U; i < CHASSIS_MOTOR_COUNT; ++i) {
         s_target_rpm[i] = 0.0f;
         Pid_Reset(&s_speed_pid[i]);
-        DjiMotor_SetCurrent(s_motor_ids[i], 0);
+        DjiMotor_SetCurrent(s_motor_config[i].motor_id, 0);
     }
 }
 
@@ -88,13 +75,13 @@ void Chassis_Stop(void)
  * ========================================================================== */
 
 /* 逐轮设置目标转速 (rpm)，顺序: 右前, 左前, 左后, 右后 */
-void Chassis_SetWheelTargetRpm(float motor1_rpm, float motor2_rpm,
-                               float motor3_rpm, float motor4_rpm)
+void Chassis_SetWheelTargetRpm(float rf_rpm, float lf_rpm,
+                               float lb_rpm, float rb_rpm)
 {
-    s_target_rpm[0] = motor1_rpm;
-    s_target_rpm[1] = motor2_rpm;
-    s_target_rpm[2] = motor3_rpm;
-    s_target_rpm[3] = motor4_rpm;
+    s_target_rpm[CHASSIS_WHEEL_RF] = rf_rpm;
+    s_target_rpm[CHASSIS_WHEEL_LF] = lf_rpm;
+    s_target_rpm[CHASSIS_WHEEL_LB] = lb_rpm;
+    s_target_rpm[CHASSIS_WHEEL_RB] = rb_rpm;
 }
 
 /*
@@ -115,10 +102,10 @@ void Chassis_SetVelocityRpm(float vx_rpm, float vy_rpm, float wz_rpm)
                               vx_rpm - vy_rpm + wz_rpm);
 }
 
-float Chassis_GetWheelTargetRpm(uint8_t wheel_index)
+float Chassis_GetWheelTargetRpm(ChassisWheelIndex wheel)
 {
-    if (wheel_index == 0U || wheel_index > CHASSIS_MOTOR_COUNT) return 0.0f;
-    return s_target_rpm[wheel_index - 1U];
+    if ((uint8_t)wheel >= CHASSIS_MOTOR_COUNT) return 0.0f;
+    return s_target_rpm[(uint8_t)wheel];
 }
 
 /* ==========================================================================
@@ -131,15 +118,18 @@ float Chassis_GetWheelTargetRpm(uint8_t wheel_index)
  *     ① 检查在线 (超时则电流置零、PID 复位)
  *     ② 目标转速 × 方向系数 → 与实际转速做 PID
  *     ③ PID 输出 → SetCurrent
- *   最后打包 0x200 帧发送到 FDCAN1
+ *   最后按电调 ID 范围打包 0x200 / 0x1FF 帧发送到 FDCAN1
  */
 void Chassis_ControlLoop(float dt_s)
 {
     uint32_t now_ms = HAL_GetTick();
-    uint8_t tx_data[8];
+    uint8_t tx_data_1_to_4[8];
+    uint8_t tx_data_5_to_8[8];
+    uint8_t need_send_1_to_4 = 0U;
+    uint8_t need_send_5_to_8 = 0U;
 
     for (uint8_t i = 0U; i < CHASSIS_MOTOR_COUNT; ++i) {
-        uint8_t motor_id = s_motor_ids[i];
+        uint8_t motor_id = s_motor_config[i].motor_id;
         DjiMotorState *motor = DjiMotor_GetState(motor_id);
         int16_t current = 0;
 
@@ -147,7 +137,7 @@ void Chassis_ControlLoop(float dt_s)
             motor->online != 0U &&
             (now_ms - motor->last_update_ms) <= CHASSIS_OFFLINE_TIMEOUT_MS) {
             /* 在线: 速度环 PID */
-            float target  = s_target_rpm[i] * (float)s_motor_dirs[i];
+            float target  = s_target_rpm[i] * (float)s_motor_config[i].direction;
             float feedback = (float)motor->speed_rpm;
             current = Chassis_FloatToCurrent(
                 Pid_Update(&s_speed_pid[i], target, feedback, dt_s));
@@ -157,11 +147,22 @@ void Chassis_ControlLoop(float dt_s)
         }
 
         DjiMotor_SetCurrent(motor_id, current);
+        if (motor_id >= 1U && motor_id <= 4U) {
+            need_send_1_to_4 = 1U;
+        } else if (motor_id >= 5U && motor_id <= 8U) {
+            need_send_5_to_8 = 1U;
+        }
     }
 
-    /* 打包 4 个电机电流 → CAN ID 0x200 发送 */
-    (void)DjiMotor_BuildCurrentFrame(DJI_MOTOR_CMD_ID_1_TO_4, tx_data);
-    (void)fdcanx_send_data(&hfdcan1, DJI_MOTOR_CMD_ID_1_TO_4, tx_data, 8U);
+    if (need_send_1_to_4 != 0U) {
+        (void)DjiMotor_BuildCurrentFrame(DJI_MOTOR_CMD_ID_1_TO_4, tx_data_1_to_4);
+        (void)fdcanx_send_data(&hfdcan1, DJI_MOTOR_CMD_ID_1_TO_4, tx_data_1_to_4, 8U);
+    }
+
+    if (need_send_5_to_8 != 0U) {
+        (void)DjiMotor_BuildCurrentFrame(DJI_MOTOR_CMD_ID_5_TO_8, tx_data_5_to_8);
+        (void)fdcanx_send_data(&hfdcan1, DJI_MOTOR_CMD_ID_5_TO_8, tx_data_5_to_8, 8U);
+    }
 }
 
 /*

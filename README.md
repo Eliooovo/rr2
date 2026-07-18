@@ -33,3 +33,32 @@ cmake --build --preset Debug
 ```
 
 Open `rr2.ioc` in STM32CubeMX to adjust pins/peripherals, then regenerate with `generate.mxscript` if needed.
+
+## 电机Can ID修改
+
+现在代码不再假设底盘四个电机一定是 1,2,3,4。比如换车后四个底盘电机 ID 是 4,1,3,2，你只需要改 Modules/chassis.h:36：
+
+  #define CHASSIS_MOTOR_CONFIG_INIT                       \
+      {                                                   \
+          {1U,  1, 6.0f, 1.0f, 0.0f}, /* RF 右前 */      \
+          {4U, -1, 6.0f, 1.0f, 0.0f}, /* LF 左前 */      \
+          {3U, -1, 6.0f, 1.0f, 0.0f}, /* LB 左后 */      \
+          {2U,  1, 6.0f, 1.0f, 0.0f}, /* RB 右后 */      \
+      }
+
+  代码会根据 ID 自动决定发哪一帧：
+
+  ID 1~4 -> 发 0x200
+  ID 5~8 -> 发 0x1FF
+
+  所以如果以后底盘 ID 不是 1,2,3,4，比如 5,6,7,8，也可以适应。只要还是 DJI C620 的 ID 范围 1~8，并且还在同一条 CAN 上，就不用改底盘控制逻辑，
+  只改配置表。
+
+  不能适应的情况是：
+
+  1. 电机不是 C620 / DJI 3508 协议
+  2. 电机 ID 超过 1~8
+  3. 四个底盘电机不在 FDCAN1，而换到了 FDCAN2/FDCAN3
+  4. 四个轮子数量或底盘类型变了，比如不是四麦轮
+
+  这些情况才需要改底层发送或底盘运动学。
