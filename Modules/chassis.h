@@ -18,13 +18,13 @@ extern "C" {
 
 /* 根据实车安装方向调整。试车时某个轮子方向反了，把对应值改为 -1。 */
 #define CHASSIS_MOTOR_DIR_1        1
-#define CHASSIS_MOTOR_DIR_2        1
-#define CHASSIS_MOTOR_DIR_3        1
+#define CHASSIS_MOTOR_DIR_2        -1
+#define CHASSIS_MOTOR_DIR_3        -1
 #define CHASSIS_MOTOR_DIR_4        1
 
 /* 上电默认不自动运动。需要四轮低速试转时改为 1。 */
-#define CHASSIS_BOOT_TEST_ENABLE   0
-#define CHASSIS_BOOT_TEST_RPM      300.0f
+#define CHASSIS_BOOT_TEST_ENABLE   1
+#define CHASSIS_BOOT_TEST_RPM      200.0f
 
 void Chassis_Init(void);
 void Chassis_Stop(void);

@@ -15,8 +15,8 @@
 #include "pid.h"
 
 /* PID 参数 — 速度环，需根据实际负载整定 */
-#define CHASSIS_SPEED_PID_KP       8.0f
-#define CHASSIS_SPEED_PID_KI       0.0f
+#define CHASSIS_SPEED_PID_KP       6.0f
+#define CHASSIS_SPEED_PID_KI       1.0f
 #define CHASSIS_SPEED_PID_KD       0.05f
 #define CHASSIS_CURRENT_LIMIT      12000.0f    /* 输出限幅，C620 最大 16384 */
 #define CHASSIS_INTEGRAL_LIMIT     6000.0f

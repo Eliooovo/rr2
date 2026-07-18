@@ -18,6 +18,45 @@
 #include "bsp_fdcan.h"
 #include "dji_motor.h"   /* DJI 电机驱动, 解析 CAN 反馈帧 */
 
+volatile uint32_t g_fdcan1_hal_rx_callback_count = 0U;
+volatile uint32_t g_fdcan1_rx_callback_count = 0U;
+volatile uint32_t g_fdcan1_receive_ok_count = 0U;
+volatile uint32_t g_fdcan1_receive_len = 0U;
+volatile uint32_t g_fdcan1_last_id = 0U;
+volatile uint32_t g_fdcan1_dji_feedback_count = 0U;
+volatile uint32_t g_fdcan1_non_dji_count = 0U;
+volatile uint32_t g_fdcan1_send_ok_count = 0U;
+volatile uint32_t g_fdcan1_send_fail_count = 0U;
+volatile uint32_t g_fdcan1_tx_fifo_free_level = 0U;
+volatile uint32_t g_fdcan1_hal_error = 0U;
+volatile uint32_t g_fdcan1_last_error_code = 0U;
+volatile uint32_t g_fdcan1_error_passive = 0U;
+volatile uint32_t g_fdcan1_warning = 0U;
+volatile uint32_t g_fdcan1_bus_off = 0U;
+volatile uint32_t g_fdcan1_tx_error_count = 0U;
+volatile uint32_t g_fdcan1_rx_error_count = 0U;
+
+static void fdcan1_update_debug_status(void)
+{
+    FDCAN_ProtocolStatusTypeDef protocol_status;
+    FDCAN_ErrorCountersTypeDef error_counters;
+
+    g_fdcan1_tx_fifo_free_level = HAL_FDCAN_GetTxFifoFreeLevel(&hfdcan1);
+    g_fdcan1_hal_error = HAL_FDCAN_GetError(&hfdcan1);
+
+    if (HAL_FDCAN_GetProtocolStatus(&hfdcan1, &protocol_status) == HAL_OK) {
+        g_fdcan1_last_error_code = protocol_status.LastErrorCode;
+        g_fdcan1_error_passive = protocol_status.ErrorPassive;
+        g_fdcan1_warning = protocol_status.Warning;
+        g_fdcan1_bus_off = protocol_status.BusOff;
+    }
+
+    if (HAL_FDCAN_GetErrorCounters(&hfdcan1, &error_counters) == HAL_OK) {
+        g_fdcan1_tx_error_count = error_counters.TxErrorCnt;
+        g_fdcan1_rx_error_count = error_counters.RxErrorCnt;
+    }
+}
+
 /* ==========================================================================
  * CAN 初始化
  * ========================================================================== */
@@ -137,7 +176,7 @@ uint8_t fdcanx_send_data(hcan_t *hfdcan, uint16_t id, uint8_t *data, uint32_t le
     if (len > 8) {
         return 1;                                               /* 经典 CAN 最长 8 字节 */
     }
-    pTxHeader.DataLength          = len;
+    pTxHeader.DataLength          = FDCAN_DLC_BYTES_8;
 
     pTxHeader.ErrorStateIndicator = FDCAN_ESI_ACTIVE;           /* 节点错误状态: 正常 */
     pTxHeader.BitRateSwitch       = FDCAN_BRS_OFF;              /* 不使用可变速率 */
@@ -146,7 +185,15 @@ uint8_t fdcanx_send_data(hcan_t *hfdcan, uint16_t id, uint8_t *data, uint32_t le
     pTxHeader.MessageMarker       = 0;                          /* 消息标记 (不用) */
 
     if (HAL_FDCAN_AddMessageToTxFifoQ(hfdcan, &pTxHeader, data) != HAL_OK) {
+        if (hfdcan == &hfdcan1) {
+            g_fdcan1_send_fail_count++;
+            fdcan1_update_debug_status();
+        }
         return 1;                                               /* TX FIFO 满或其他错误 */
+    }
+    if (hfdcan == &hfdcan1) {
+        g_fdcan1_send_ok_count++;
+        fdcan1_update_debug_status();
     }
     return 0;
 }
@@ -252,11 +299,25 @@ uint16_t rec_id1;
  */
 void fdcan1_rx_callback(void)
 {
-    if (fdcanx_receive(&hfdcan1, &rec_id1, rx_data1) == 8U)
+    uint8_t len;
+
+    g_fdcan1_rx_callback_count++;
+    len = fdcanx_receive(&hfdcan1, &rec_id1, rx_data1);
+    g_fdcan1_receive_len = len;
+    g_fdcan1_last_id = rec_id1;
+    fdcan1_update_debug_status();
+
+    if (len == 8U)
     {
-        /* 将 CAN 帧数据 + ID + 时间戳送入 DJI 电机驱动解析 */
-        (void)DjiMotor_HandleFeedback(rec_id1, rx_data1, HAL_GetTick());//这就是接收链路的最后一段——把 CAN 硬件收到的原始字节，交给 DjiMotor_HandleFeedback() 解析成 encoder/speed_rpm/temperature
-                                                                                            // 等结构化数据，更新到 g_dji_motors[]。
+        uint8_t motor_id;
+
+        g_fdcan1_receive_ok_count++;
+        motor_id = DjiMotor_HandleFeedback(rec_id1, rx_data1, HAL_GetTick());
+        if (motor_id != 0U) {
+            g_fdcan1_dji_feedback_count++;
+        } else {
+            g_fdcan1_non_dji_count++;
+        }
     }
 }
 
@@ -307,6 +368,7 @@ void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs)
 {
     if (hfdcan == &hfdcan1)
     {
+        g_fdcan1_hal_rx_callback_count++;
         fdcan1_rx_callback();    /* 底盘电机 CAN 反馈 */
     }
     if (hfdcan == &hfdcan2)

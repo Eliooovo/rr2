@@ -26,6 +26,24 @@
 /* 类型别名，简化 HAL 句柄引用 */
 #define hcan_t FDCAN_HandleTypeDef
 
+extern volatile uint32_t g_fdcan1_hal_rx_callback_count;
+extern volatile uint32_t g_fdcan1_rx_callback_count;
+extern volatile uint32_t g_fdcan1_receive_ok_count;
+extern volatile uint32_t g_fdcan1_receive_len;
+extern volatile uint32_t g_fdcan1_last_id;
+extern volatile uint32_t g_fdcan1_dji_feedback_count;
+extern volatile uint32_t g_fdcan1_non_dji_count;
+extern volatile uint32_t g_fdcan1_send_ok_count;
+extern volatile uint32_t g_fdcan1_send_fail_count;
+extern volatile uint32_t g_fdcan1_tx_fifo_free_level;
+extern volatile uint32_t g_fdcan1_hal_error;
+extern volatile uint32_t g_fdcan1_last_error_code;
+extern volatile uint32_t g_fdcan1_error_passive;
+extern volatile uint32_t g_fdcan1_warning;
+extern volatile uint32_t g_fdcan1_bus_off;
+extern volatile uint32_t g_fdcan1_tx_error_count;
+extern volatile uint32_t g_fdcan1_rx_error_count;
+
 /* ==========================================================================
  * 初始化
  * ========================================================================== */
