@@ -25,6 +25,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "bsp_fdcan.h"
+#include "dji_motor.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -101,6 +102,7 @@ int main(void)
   MX_FDCAN3_Init();
   MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
+  DjiMotor_Init();
   bsp_can_init();
   /* USER CODE END 2 */
 
