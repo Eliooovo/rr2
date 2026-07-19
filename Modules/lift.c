@@ -17,8 +17,9 @@
 static const LiftMotorConfig s_lift_config[LIFT_MOTOR_COUNT] =
     LIFT_MOTOR_CONFIG_INIT;
 
-/* 每个电机两套 PID: 位置外环 + 速度内环 */
-static PidController s_position_pid[LIFT_MOTOR_COUNT];
+/* 位置环按“前/后两组”控制，速度环仍按单电机控制。
+ * 两个电机共同驱动一个抬升时，位置 PID 看组平均位置，避免两个独立位置环互相打架。 */
+static PidController s_pair_position_pid[LIFT_PAIR_COUNT];
 static PidController s_speed_pid[LIFT_MOTOR_COUNT];
 
 static float    s_target_position_deg[LIFT_MOTOR_COUNT]; /* 目标位置 (度) */
@@ -60,6 +61,22 @@ static uint8_t Lift_IsValidIndex(LiftMotorIndex motor)
     return ((uint8_t)motor < LIFT_MOTOR_COUNT) ? 1U : 0U;
 }
 
+/* 电机 1/2 为前组，电机 3/4 为后组。 */
+static uint8_t Lift_GetPairIndex(LiftMotorIndex motor)
+{
+    return ((uint8_t)motor < 2U) ? 0U : 1U;
+}
+
+static LiftMotorIndex Lift_GetPairMotorA(uint8_t pair_index)
+{
+    return (pair_index == 0U) ? LIFT_MOTOR_1 : LIFT_MOTOR_3;
+}
+
+static LiftMotorIndex Lift_GetPairMotorB(uint8_t pair_index)
+{
+    return (pair_index == 0U) ? LIFT_MOTOR_2 : LIFT_MOTOR_4;
+}
+
 /* 读取电机的原始多圈角度 (未减零点) */
 static float Lift_GetRawPositionDeg(LiftMotorIndex motor)
 {
@@ -67,6 +84,36 @@ static float Lift_GetRawPositionDeg(LiftMotorIndex motor)
     DjiMotorState *state = DjiMotor_GetState(config->motor_id);
     if (state == 0) return 0.0f;
     return state->total_angle_deg;
+}
+
+static uint8_t Lift_MotorOnlineRecently(LiftMotorIndex motor, uint32_t now_ms)
+{
+    const LiftMotorConfig *config = &s_lift_config[(uint8_t)motor];
+    DjiMotorState *state = DjiMotor_GetState(config->motor_id);
+
+    return (state != 0 &&
+            state->online != 0U &&
+            (now_ms - state->last_update_ms) <= LIFT_OFFLINE_TIMEOUT_MS) ? 1U : 0U;
+}
+
+static uint8_t Lift_PairReady(uint8_t pair_index, uint32_t now_ms)
+{
+    LiftMotorIndex motor_a = Lift_GetPairMotorA(pair_index);
+    LiftMotorIndex motor_b = Lift_GetPairMotorB(pair_index);
+
+    return (s_motor_enabled[(uint8_t)motor_a] != 0U &&
+            s_motor_enabled[(uint8_t)motor_b] != 0U &&
+            Lift_MotorOnlineRecently(motor_a, now_ms) != 0U &&
+            Lift_MotorOnlineRecently(motor_b, now_ms) != 0U) ? 1U : 0U;
+}
+
+/* 复位一组的位置 PID。单个电机禁用、离线或重新设零点时都要复位，
+ * 防止恢复时位置环带着旧误差直接冲击速度目标。 */
+static void Lift_ResetPairPositionPid(uint8_t pair_index)
+{
+    if (pair_index < LIFT_PAIR_COUNT) {
+        Pid_Reset(&s_pair_position_pid[pair_index]);
+    }
 }
 
 #if LIFT_BOOT_TEST_ENABLE
@@ -119,17 +166,22 @@ static void Lift_SendCurrentFrames(void)
 
 void Lift_Init(void)
 {
-    for (uint8_t i = 0U; i < LIFT_MOTOR_COUNT; ++i) {
-        /* 位置环: 输出目标速度 (rpm)，限幅 ±max_speed_rpm */
-        Pid_Init(&s_position_pid[i],
-                 s_lift_config[i].position_kp,
-                 s_lift_config[i].position_ki,
-                 s_lift_config[i].position_kd,
-                 -s_lift_config[i].max_speed_rpm,
-                  s_lift_config[i].max_speed_rpm,
+    for (uint8_t pair = 0U; pair < LIFT_PAIR_COUNT; ++pair) {
+        uint8_t config_index = (pair == 0U) ? (uint8_t)LIFT_MOTOR_1 : (uint8_t)LIFT_MOTOR_3;
+
+        /* 每组一个位置环: 前组用电机1的参数，后组用电机3的参数。
+         * 组内两台电机的 position/max_speed 参数应保持一致。 */
+        Pid_Init(&s_pair_position_pid[pair],
+                 s_lift_config[config_index].position_kp,
+                 s_lift_config[config_index].position_ki,
+                 s_lift_config[config_index].position_kd,
+                 -s_lift_config[config_index].max_speed_rpm,
+                  s_lift_config[config_index].max_speed_rpm,
                  -LIFT_POSITION_INTEGRAL_LIMIT,
                   LIFT_POSITION_INTEGRAL_LIMIT);
+    }
 
+    for (uint8_t i = 0U; i < LIFT_MOTOR_COUNT; ++i) {
         /* 速度环: 输出电流指令，限幅 ±current_limit */
         Pid_Init(&s_speed_pid[i],
                  s_lift_config[i].speed_kp,
@@ -154,9 +206,12 @@ void Lift_Init(void)
 /* 紧急停止 */
 void Lift_Stop(void)
 {
+    for (uint8_t pair = 0U; pair < LIFT_PAIR_COUNT; ++pair) {
+        Lift_ResetPairPositionPid(pair);
+    }
+
     for (uint8_t i = 0U; i < LIFT_MOTOR_COUNT; ++i) {
         s_motor_enabled[i] = 0U;
-        Pid_Reset(&s_position_pid[i]);
         Pid_Reset(&s_speed_pid[i]);
         DjiMotor_SetCurrent(s_lift_config[i].motor_id, 0);
     }
@@ -194,7 +249,7 @@ void Lift_DisableMotor(LiftMotorIndex motor)
     if (!Lift_IsValidIndex(motor)) return;
 
     s_motor_enabled[index] = 0U;
-    Pid_Reset(&s_position_pid[index]);
+    Lift_ResetPairPositionPid(Lift_GetPairIndex(motor));
     Pid_Reset(&s_speed_pid[index]);
     DjiMotor_SetCurrent(s_lift_config[index].motor_id, 0);
 }
@@ -208,7 +263,7 @@ void Lift_SetZeroToCurrent(LiftMotorIndex motor)
 
     s_zero_offset_deg[index]     = Lift_GetRawPositionDeg(motor);
     s_target_position_deg[index] = 0.0f;
-    Pid_Reset(&s_position_pid[index]);
+    Lift_ResetPairPositionPid(Lift_GetPairIndex(motor));
     Pid_Reset(&s_speed_pid[index]);
 }
 
@@ -235,43 +290,70 @@ float Lift_GetTargetPositionDeg(LiftMotorIndex motor)
 /* ==========================================================================
  * 串级 PID 控制循环 (1kHz)
  *
- *   位置误差 → 位置 PID → 目标速度 (rpm)
- *   速度误差 → 速度 PID → 电流指令 → SetCurrent
+ *   组平均位置误差 → 组位置 PID → 组目标速度 (rpm)
+ *   组内位置差 → 同步补偿 → 两台电机各自目标速度
+ *   单电机速度误差 → 单电机速度 PID → 电流指令 → SetCurrent
  *   最后打包发送到 FDCAN2
  *
- * 离线保护: 电机离线时复位 PID，电流置零
+ * 离线保护: 一组里任意电机离线/禁用时，该组两个电机都清零。
  * ========================================================================== */
 void Lift_ControlLoop(float dt_s)
 {
     uint32_t now_ms = HAL_GetTick();
 
-    for (uint8_t i = 0U; i < LIFT_MOTOR_COUNT; ++i) {
-        const LiftMotorConfig *config = &s_lift_config[i];
-        DjiMotorState *state = DjiMotor_GetState(config->motor_id);
-        int16_t current = 0;
+    for (uint8_t pair = 0U; pair < LIFT_PAIR_COUNT; ++pair) {
+        LiftMotorIndex motor_a = Lift_GetPairMotorA(pair);
+        LiftMotorIndex motor_b = Lift_GetPairMotorB(pair);
+        uint8_t index_a = (uint8_t)motor_a;
+        uint8_t index_b = (uint8_t)motor_b;
+        const LiftMotorConfig *config_a = &s_lift_config[index_a];
+        const LiftMotorConfig *config_b = &s_lift_config[index_b];
+        DjiMotorState *state_a = DjiMotor_GetState(config_a->motor_id);
+        DjiMotorState *state_b = DjiMotor_GetState(config_b->motor_id);
+        int16_t current_a = 0;
+        int16_t current_b = 0;
 
-        if (s_motor_enabled[i] != 0U &&
-            state != 0 &&
-            state->online != 0U &&
-            (now_ms - state->last_update_ms) <= LIFT_OFFLINE_TIMEOUT_MS) {
+        if (Lift_PairReady(pair, now_ms) != 0U) {
+            float position_a = Lift_GetPositionDeg(motor_a);
+            float position_b = Lift_GetPositionDeg(motor_b);
+            float target_pair = (s_target_position_deg[index_a] +
+                                 s_target_position_deg[index_b]) * 0.5f;
+            float position_pair = (position_a + position_b) * 0.5f;
 
-            float position_deg   = Lift_GetPositionDeg((LiftMotorIndex)i);
-            float target_rpm     = Pid_Update(&s_position_pid[i],
-                                              s_target_position_deg[i],
-                                              position_deg, dt_s);
-            float raw_target_rpm = target_rpm * (float)config->direction;
-            float raw_current    = Pid_Update(&s_speed_pid[i],
-                                              raw_target_rpm,
-                                              (float)state->speed_rpm, dt_s);
+            /* 组位置环只看平均位置，保证一组两个电机以同一个目标速度启动/停止。 */
+            float pair_target_rpm = Pid_Update(&s_pair_position_pid[pair],
+                                               target_pair,
+                                               position_pair,
+                                               dt_s);
 
-            current = Lift_FloatToCurrent(raw_current, config->current_limit);
+            /* 同步补偿只管组内位置差:
+             * A 比 B 位置大时，A 的目标速度减小，B 的目标速度增大，让两边追平。 */
+            float sync_error_deg = position_a - position_b;
+            float sync_rpm = Lift_Clamp(sync_error_deg * LIFT_PAIR_SYNC_KP,
+                                        -LIFT_PAIR_SYNC_MAX_RPM,
+                                         LIFT_PAIR_SYNC_MAX_RPM);
+            float target_rpm_a = (pair_target_rpm - sync_rpm) * (float)config_a->direction;
+            float target_rpm_b = (pair_target_rpm + sync_rpm) * (float)config_b->direction;
+            float raw_current_a = Pid_Update(&s_speed_pid[index_a],
+                                             target_rpm_a,
+                                             (float)state_a->speed_rpm,
+                                             dt_s);
+            float raw_current_b = Pid_Update(&s_speed_pid[index_b],
+                                             target_rpm_b,
+                                             (float)state_b->speed_rpm,
+                                             dt_s);
+
+            current_a = Lift_FloatToCurrent(raw_current_a, config_a->current_limit);
+            current_b = Lift_FloatToCurrent(raw_current_b, config_b->current_limit);
         } else {
-            /* 离线或禁用: 复位 PID，防止恢复时积分冲击 */
-            Pid_Reset(&s_position_pid[i]);
-            Pid_Reset(&s_speed_pid[i]);
+            /* 一组中只要有电机离线或禁用，就整组清零，避免单边拉抬升机构。 */
+            Lift_ResetPairPositionPid(pair);
+            Pid_Reset(&s_speed_pid[index_a]);
+            Pid_Reset(&s_speed_pid[index_b]);
         }
 
-        DjiMotor_SetCurrent(config->motor_id, current);
+        DjiMotor_SetCurrent(config_a->motor_id, current_a);
+        DjiMotor_SetCurrent(config_b->motor_id, current_b);
     }
 
     Lift_SendCurrentFrames();
@@ -295,7 +377,7 @@ void Lift_RunPeriodic(void)
     s_last_control_ms = now_ms;
 
 #if LIFT_BOOT_TEST_ENABLE
-    /* 等四台电机全部在线后，以当前位置为零点，运动 180° */
+    /* 等四台电机全部在线后，以当前位置为零点，运动到 LIFT_BOOT_TEST_DEG。 */
     if (s_boot_test_started == 0U && Lift_AllMotorsRecentlyOnline(now_ms) != 0U) {
         Lift_SetZeroToCurrent(LIFT_MOTOR_1);
         Lift_SetZeroToCurrent(LIFT_MOTOR_2);

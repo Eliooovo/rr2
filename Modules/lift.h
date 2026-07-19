@@ -20,6 +20,9 @@ extern "C" {
 #define LIFT_OFFLINE_TIMEOUT_MS      100U   /* 电机超时判定离线 */
 #define LIFT_POSITION_INTEGRAL_LIMIT 0.0f   /* 位置环积分限幅 (0=禁用) */
 #define LIFT_SPEED_INTEGRAL_LIMIT    30000.0f
+#define LIFT_PAIR_COUNT              2U     /* 前/后两组升降，每组 2 台电机 */
+#define LIFT_PAIR_SYNC_KP            5.0f   /* 组内同步 P: 位置差(度) → 速度修正(rpm) */
+#define LIFT_PAIR_SYNC_MAX_RPM       200.0f /* 组内同步修正限幅，避免单边补偿过猛 */
 
 /* 上电自测: 等待电机全部在线后，以当前位置为零点，运动到 BOOT_TEST_DEG 度 */
 #define LIFT_BOOT_TEST_ENABLE        0

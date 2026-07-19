@@ -56,6 +56,20 @@ void Comm_OnUsbReceived(const uint8_t *data, uint32_t len);  /* USB CDC 收到�
 uint8_t Comm_HasCommand(void);                      /* 是否收到过指令 */
 const CommFrameFloats *Comm_GetLastCommand(void);   /* 获取最近一次收到的命令 */
 
+extern volatile uint32_t g_comm_rx_valid_frame_count;
+extern volatile float g_comm_rx_vx;
+extern volatile float g_comm_rx_vy;
+extern volatile float g_comm_rx_vw;
+extern volatile uint32_t g_comm_rx_vx_bits;
+extern volatile uint32_t g_comm_rx_vy_bits;
+extern volatile uint32_t g_comm_rx_vw_bits;
+extern volatile uint8_t g_comm_rx_last_packet[COMM_PACKET_SIZE];
+extern volatile uint32_t g_comm_rx_float_bits[COMM_FLOAT_COUNT];
+extern volatile float g_comm_apply_vx;
+extern volatile float g_comm_apply_vy;
+extern volatile float g_comm_apply_vw;
+extern volatile uint32_t g_comm_apply_count;
+
 #ifdef __cplusplus
 }
 #endif

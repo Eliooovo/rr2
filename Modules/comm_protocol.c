@@ -28,6 +28,22 @@
 #define COMM_LIFT_PAIR_REAR_A  LIFT_MOTOR_3
 #define COMM_LIFT_PAIR_REAR_B  LIFT_MOTOR_4
 
+/* Ozone 调试用: 观察 USB 是否收到有效速度命令。
+ * 收到一帧合法命令后，count 增加，vx/vy/vw 更新为上位机发来的前三个 float。 */
+volatile uint32_t g_comm_rx_valid_frame_count;
+volatile float g_comm_rx_vx;
+volatile float g_comm_rx_vy;
+volatile float g_comm_rx_vw;
+volatile uint32_t g_comm_rx_vx_bits;
+volatile uint32_t g_comm_rx_vy_bits;
+volatile uint32_t g_comm_rx_vw_bits;
+volatile uint8_t g_comm_rx_last_packet[COMM_PACKET_SIZE];
+volatile uint32_t g_comm_rx_float_bits[COMM_FLOAT_COUNT];
+volatile float g_comm_apply_vx;
+volatile float g_comm_apply_vy;
+volatile float g_comm_apply_vw;
+volatile uint32_t g_comm_apply_count;
+
 /* --- 环形缓冲区 (USB CDC 中断写入 → 主循环读出) --- */
 static volatile uint16_t s_rx_head;             /* 写指针 (中断上下文) */
 static volatile uint16_t s_rx_tail;             /* 读指针 (主循环上下文) */
@@ -99,6 +115,14 @@ static float Comm_ReadFloatLe(const uint8_t *data)
     return value;
 }
 
+static uint32_t Comm_ReadU32Le(const uint8_t *data)
+{
+    return ((uint32_t)data[0]) |
+           ((uint32_t)data[1] << 8U) |
+           ((uint32_t)data[2] << 16U) |
+           ((uint32_t)data[3] << 24U);
+}
+
 #if !COMM_USB_TEST_FRAME_ENABLE
 /* 将 float 写入 4 字节 buffer (LE) */
 static void Comm_WriteFloatLe(uint8_t *data, float value)
@@ -126,12 +150,24 @@ static void Comm_UnpackCommand(const uint8_t packet[COMM_PACKET_SIZE])
         &s_last_command.tip_grip,
     };
 
+    for (uint8_t i = 0U; i < COMM_PACKET_SIZE; ++i) {
+        g_comm_rx_last_packet[i] = packet[i];
+    }
+
     for (uint8_t i = 0U; i < COMM_FLOAT_COUNT; ++i) {
+        g_comm_rx_float_bits[i] = Comm_ReadU32Le(&packet[1U + i * 4U]);
         *fields[i] = Comm_ReadFloatLe(&packet[1U + i * 4U]);
     }
 
     s_has_command        = 1U;
     s_new_command_pending = 1U;
+    g_comm_rx_valid_frame_count++;
+    g_comm_rx_vx = s_last_command.vx;
+    g_comm_rx_vy = s_last_command.vy;
+    g_comm_rx_vw = s_last_command.vw;
+    g_comm_rx_vx_bits = g_comm_rx_float_bits[0];
+    g_comm_rx_vy_bits = g_comm_rx_float_bits[1];
+    g_comm_rx_vw_bits = g_comm_rx_float_bits[2];
 }
 
 /* 从环形缓冲区取字节，按帧头帧尾动态定位一帧 */
@@ -189,12 +225,14 @@ static void Comm_ZeroLiftWhenReady(uint32_t now_ms)
 /* 将收到的命令分发到各控制模块 */
 static void Comm_ApplyCommand(void)
 {
-    uint32_t now_ms = HAL_GetTick();
-
     if (s_new_command_pending == 0U) return;//没有新命令，直接返回
     s_new_command_pending = 0U;
 
     /* 底盘: vx/vy/vw → 麦轮解算 → 速度 PID */
+    g_comm_apply_count++;
+    g_comm_apply_vx = s_last_command.vx;
+    g_comm_apply_vy = s_last_command.vy;
+    g_comm_apply_vw = s_last_command.vw;
     Chassis_SetVelocityRpm(s_last_command.vx,
                            s_last_command.vy,
                            s_last_command.vw);
@@ -300,6 +338,23 @@ void Comm_Init(void)
     s_new_command_pending = 0U;
     s_lift_zeroed    = 0U;
     s_last_feedback_ms = 0U;
+    g_comm_rx_valid_frame_count = 0U;
+    g_comm_rx_vx = 0.0f;
+    g_comm_rx_vy = 0.0f;
+    g_comm_rx_vw = 0.0f;
+    g_comm_rx_vx_bits = 0U;
+    g_comm_rx_vy_bits = 0U;
+    g_comm_rx_vw_bits = 0U;
+    g_comm_apply_vx = 0.0f;
+    g_comm_apply_vy = 0.0f;
+    g_comm_apply_vw = 0.0f;
+    g_comm_apply_count = 0U;
+    for (uint8_t i = 0U; i < COMM_PACKET_SIZE; ++i) {
+        g_comm_rx_last_packet[i] = 0U;
+    }
+    for (uint8_t i = 0U; i < COMM_FLOAT_COUNT; ++i) {
+        g_comm_rx_float_bits[i] = 0U;
+    }
     (void)memset(&s_last_command, 0, sizeof(s_last_command));
 }
 

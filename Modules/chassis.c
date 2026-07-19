@@ -23,6 +23,14 @@ static PidController s_speed_pid[CHASSIS_MOTOR_COUNT];
 static float        s_target_rpm[CHASSIS_MOTOR_COUNT];
 static uint32_t     s_last_control_ms;
 
+/* Ozone 调试用: Chassis_SetVelocityRpm() 解算后的四轮目标转速。
+ * 顺序: 右前、左前、左后、右后。 */
+volatile float g_chassis_target_rpm[CHASSIS_MOTOR_COUNT];
+volatile float g_chassis_cmd_vx;
+volatile float g_chassis_cmd_vy;
+volatile float g_chassis_cmd_vw;
+volatile uint32_t g_chassis_set_velocity_count;
+
 /* float 电流值 → int16_t，自动限幅 */
 static int16_t Chassis_FloatToCurrent(float value)
 {
@@ -45,7 +53,12 @@ void Chassis_Init(void)
                  -CHASSIS_CURRENT_LIMIT,  CHASSIS_CURRENT_LIMIT,
                  -CHASSIS_INTEGRAL_LIMIT, CHASSIS_INTEGRAL_LIMIT);
         s_target_rpm[i] = 0.0f;
+        g_chassis_target_rpm[i] = 0.0f;
     }
+    g_chassis_cmd_vx = 0.0f;
+    g_chassis_cmd_vy = 0.0f;
+    g_chassis_cmd_vw = 0.0f;
+    g_chassis_set_velocity_count = 0U;
 
     s_last_control_ms = 0U;
 
@@ -65,6 +78,7 @@ void Chassis_Stop(void)
 {
     for (uint8_t i = 0U; i < CHASSIS_MOTOR_COUNT; ++i) {
         s_target_rpm[i] = 0.0f;
+        g_chassis_target_rpm[i] = 0.0f;
         Pid_Reset(&s_speed_pid[i]);
         DjiMotor_SetCurrent(s_motor_config[i].motor_id, 0);
     }
@@ -82,6 +96,11 @@ void Chassis_SetWheelTargetRpm(float rf_rpm, float lf_rpm,
     s_target_rpm[CHASSIS_WHEEL_LF] = lf_rpm;
     s_target_rpm[CHASSIS_WHEEL_LB] = lb_rpm;
     s_target_rpm[CHASSIS_WHEEL_RB] = rb_rpm;
+
+    g_chassis_target_rpm[CHASSIS_WHEEL_RF] = rf_rpm;
+    g_chassis_target_rpm[CHASSIS_WHEEL_LF] = lf_rpm;
+    g_chassis_target_rpm[CHASSIS_WHEEL_LB] = lb_rpm;
+    g_chassis_target_rpm[CHASSIS_WHEEL_RB] = rb_rpm;
 }
 
 /*
@@ -96,6 +115,11 @@ void Chassis_SetWheelTargetRpm(float rf_rpm, float lf_rpm,
  */
 void Chassis_SetVelocityRpm(float vx_rpm, float vy_rpm, float wz_rpm)
 {
+    g_chassis_set_velocity_count++;
+    g_chassis_cmd_vx = vx_rpm;
+    g_chassis_cmd_vy = vy_rpm;
+    g_chassis_cmd_vw = wz_rpm;
+
     Chassis_SetWheelTargetRpm(vx_rpm - vy_rpm - wz_rpm,
                               vx_rpm + vy_rpm + wz_rpm,
                               vx_rpm + vy_rpm - wz_rpm,

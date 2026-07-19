@@ -57,6 +57,12 @@ void Chassis_SetWheelTargetRpm(float rf_rpm,
 void Chassis_SetVelocityRpm(float vx_rpm, float vy_rpm, float wz_rpm);
 float Chassis_GetWheelTargetRpm(ChassisWheelIndex wheel);
 
+extern volatile float g_chassis_target_rpm[CHASSIS_MOTOR_COUNT];
+extern volatile float g_chassis_cmd_vx;
+extern volatile float g_chassis_cmd_vy;
+extern volatile float g_chassis_cmd_vw;
+extern volatile uint32_t g_chassis_set_velocity_count;
+
 #ifdef __cplusplus
 }
 #endif
