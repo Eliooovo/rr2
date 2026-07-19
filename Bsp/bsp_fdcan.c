@@ -19,7 +19,11 @@
 #include "dji_motor.h"   /* DJI 电机驱动, 解析 CAN 反馈帧 */
 
 volatile uint32_t g_fdcan1_hal_rx_callback_count = 0U;
+
 volatile uint32_t g_fdcan1_rx_callback_count = 0U;
+volatile uint32_t g_fdcan2_rx_callback_count = 0U;
+volatile uint32_t g_fdcan3_rx_callback_count = 0U;
+
 volatile uint32_t g_fdcan1_receive_ok_count = 0U;
 volatile uint32_t g_fdcan1_receive_len = 0U;
 volatile uint32_t g_fdcan1_last_id = 0U;
@@ -336,6 +340,7 @@ uint16_t rec_id2;
 void fdcan2_rx_callback(void)
 {
     uint8_t len2;
+    g_fdcan2_rx_callback_count++;
     len2 = fdcanx_receive(&hfdcan2, &rec_id2, rx_data2);
     if (len2 == 8U)
     {

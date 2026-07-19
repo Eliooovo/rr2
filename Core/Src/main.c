@@ -27,6 +27,7 @@
 #include "bsp_fdcan.h"
 #include "chassis.h"
 #include "dji_motor.h"
+#include "lift.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -36,6 +37,7 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+
 
 /* USER CODE END PD */
 
@@ -105,6 +107,7 @@ int main(void)
   /* USER CODE BEGIN 2 */
   DjiMotor_Init();
   Chassis_Init();
+  Lift_Init();
   bsp_can_init();
   /* USER CODE END 2 */
 
@@ -116,6 +119,8 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
    // Chassis_RunPeriodic();
+
+    Lift_RunPeriodic();
   }
   /* USER CODE END 3 */
 }
