@@ -27,7 +27,7 @@ extern "C" {
 #define COMM_FEEDBACK_PERIOD_MS 20U                        /* 反馈帧发送周期 (二进制模式) */
 
 /* 调试: 发送固定 46 字节测试帧 (头尾填好，float 全 0)，验证 USB CDC 链路 */
-#define COMM_USB_TEST_FRAME_ENABLE 1U
+#define COMM_USB_TEST_FRAME_ENABLE 0U
 #define COMM_USB_TEST_FRAME_PERIOD_MS 1000U
 
 /* 一帧里的 11 个 float 字段 */

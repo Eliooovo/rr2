@@ -17,6 +17,7 @@
 #include "dji_motor.h"
 #include "lift.h"
 #include "main.h"
+#include "stm32h7xx_hal.h"
 #include "usbd_cdc_if.h"
 
 #define COMM_RX_BUFFER_SIZE 256U    /* 环形缓冲区大小 */
@@ -190,7 +191,7 @@ static void Comm_ApplyCommand(void)
 {
     uint32_t now_ms = HAL_GetTick();
 
-    if (s_new_command_pending == 0U) return;
+    if (s_new_command_pending == 0U) return;//没有新命令，直接返回
     s_new_command_pending = 0U;
 
     /* 底盘: vx/vy/vw → 麦轮解算 → 速度 PID */
@@ -199,7 +200,7 @@ static void Comm_ApplyCommand(void)
                            s_last_command.vw);
 
     /* 升降: 等首次在线 → 设零点 → 位置 PID */
-    Comm_ZeroLiftWhenReady(now_ms);
+    //Comm_ZeroLiftWhenReady(now_ms);
     if (s_lift_zeroed != 0U) {
         Lift_SetTargetPositionDeg(COMM_LIFT_PAIR_FRONT_A, s_last_command.front_lift);
         Lift_SetTargetPositionDeg(COMM_LIFT_PAIR_FRONT_B, s_last_command.front_lift);
@@ -305,9 +306,10 @@ void Comm_Init(void)
 /* 主循环每圈调用: 解析 RX → 执行指令 → 发送反馈 */
 void Comm_RunPeriodic(void)
 {
-    Comm_ParseRx();
+    Comm_ParseRx();//解析收到的指令
+    Comm_ZeroLiftWhenReady(HAL_GetTick());//检查升降电机是否在线，若在线则设零点
     Comm_ApplyCommand();
-    Comm_SendFeedbackPeriodic();
+    Comm_SendFeedbackPeriodic();//发送反馈
 }
 
 /* USB CDC 接收到数据时回调 (中断上下文)，将数据推入环形缓冲区 */

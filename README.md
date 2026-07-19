@@ -66,3 +66,10 @@ Open `rr2.ioc` in STM32CubeMX to adjust pins/peripherals, then regenerate with `
   ## 转动角度： float Lift_GetPositionDeg（） #lift.c
       g_dji_motors[i].total_angle_deg - s_zero_offset_deg[i]
        (电机原始累积角度，绝对累计值)         （i号lift电机启动测试时记录的零点）
+
+  ## 反馈帧：
+  front_lift/rear_lift :真实角度（Lift_GetPositionDeg（））读的是电机实际位置：g_dji_motors[i].total_angle_deg，只要电机在线就有值
+
+  ## 传位置：#define LIFT_BOOT_TEST_DEG           3600.0f
+  aa 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 55
+  aa 00 00 00 00 00 00 00 00 00 00 00 00 00 00 61 45 00 00 61 45 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 55
