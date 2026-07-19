@@ -14,7 +14,7 @@ extern "C" {
 #define CHASSIS_OFFLINE_TIMEOUT_MS 100U
 
 /* 上电默认不自动运动。需要四轮低速试转时改为 1。 */
-#define CHASSIS_BOOT_TEST_ENABLE   1
+#define CHASSIS_BOOT_TEST_ENABLE   0
 #define CHASSIS_BOOT_TEST_RPM      300.0f
 
 typedef enum {

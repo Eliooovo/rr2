@@ -23,7 +23,9 @@ add_executable(${CMAKE_PROJECT_NAME}
     Modules/chassis.c
     Modules/chassis.h
     Modules/lift.c
-    Modules/lift.h)
+    Modules/lift.h
+    Modules/comm_protocol.c
+    Modules/comm_protocol.h)
 
 add_subdirectory(cmake/stm32cubemx)
 

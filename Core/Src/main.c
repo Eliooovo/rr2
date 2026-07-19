@@ -27,6 +27,7 @@
 /* USER CODE BEGIN Includes */
 #include "bsp_fdcan.h"
 #include "chassis.h"
+#include "comm_protocol.h"
 #include "dji_motor.h"
 #include "lift.h"
 /* USER CODE END Includes */
@@ -111,6 +112,7 @@ int main(void)
   Chassis_Init();
   Lift_Init();
   bsp_can_init();
+  Comm_Init();
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -120,9 +122,9 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+    Comm_RunPeriodic();
     Chassis_RunPeriodic();
-
-    //Lift_RunPeriodic();
+    Lift_RunPeriodic();
   }
   /* USER CODE END 3 */
 }
