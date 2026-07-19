@@ -21,7 +21,9 @@ add_executable(${CMAKE_PROJECT_NAME}
     Algorithm/pid.c
     Algorithm/pid.h
     Modules/chassis.c
-    Modules/chassis.h)
+    Modules/chassis.h
+    Modules/lift.c
+    Modules/lift.h)
 
 add_subdirectory(cmake/stm32cubemx)
 

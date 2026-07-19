@@ -299,20 +299,20 @@ uint16_t rec_id1;
  */
 void fdcan1_rx_callback(void)
 {
-    uint8_t len;
+    uint8_t len1;
 
     g_fdcan1_rx_callback_count++;
-    len = fdcanx_receive(&hfdcan1, &rec_id1, rx_data1);
-    g_fdcan1_receive_len = len;
+    len1 = fdcanx_receive(&hfdcan1, &rec_id1, rx_data1); //从硬件 FIFO 读取一帧 CAN 数据
+    g_fdcan1_receive_len = len1;
     g_fdcan1_last_id = rec_id1;
     fdcan1_update_debug_status();
 
-    if (len == 8U)
+    if (len1 == 8U)
     {
         uint8_t motor_id;
 
         g_fdcan1_receive_ok_count++;
-        motor_id = DjiMotor_HandleFeedback(rec_id1, rx_data1, HAL_GetTick());
+        motor_id = DjiMotor_HandleFeedback(rec_id1, rx_data1, HAL_GetTick()); // 解析 CAN 帧并更新电机状态
         if (motor_id != 0U) {
             g_fdcan1_dji_feedback_count++;
         } else {
@@ -335,7 +335,13 @@ uint16_t rec_id2;
  */
 void fdcan2_rx_callback(void)
 {
-    fdcanx_receive(&hfdcan2, &rec_id2, rx_data2);
+    uint8_t len2;
+    len2 = fdcanx_receive(&hfdcan2, &rec_id2, rx_data2);
+    if (len2 == 8U)
+    {
+        DjiMotor_HandleFeedback(rec_id2, rx_data2, HAL_GetTick());
+    
+    }
 }
 
 /*
@@ -352,7 +358,12 @@ uint16_t rec_id3;
  */
 void fdcan3_rx_callback(void)
 {
-    fdcanx_receive(&hfdcan3, &rec_id3, rx_data3);
+    uint8_t len3;
+    len3 = fdcanx_receive(&hfdcan3, &rec_id3, rx_data3);
+    if (len3 == 8U)
+    {
+        // Process the received frame for灵足电机
+    }
 }
 
 /**
