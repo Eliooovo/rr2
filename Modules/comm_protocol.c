@@ -228,14 +228,15 @@ static void Comm_ApplyCommand(void)
     if (s_new_command_pending == 0U) return;//没有新命令，直接返回
     s_new_command_pending = 0U;
 
-    /* 底盘: vx/vy/vw → 麦轮解算 → 速度 PID */
+    /* 底盘: 上位机发送 vx/vy 单位 m/s，vw 单位 rad/s。
+     * Chassis_SetVelocity() 内部会换算成 C620 反馈侧 rpm。 */
     g_comm_apply_count++;
     g_comm_apply_vx = s_last_command.vx;
     g_comm_apply_vy = s_last_command.vy;
     g_comm_apply_vw = s_last_command.vw;
-    Chassis_SetVelocityRpm(s_last_command.vx,
-                           s_last_command.vy,
-                           s_last_command.vw);
+    Chassis_SetVelocity(s_last_command.vx,
+                        s_last_command.vy,
+                        s_last_command.vw);
 
     /* 升降: 等首次在线 → 设零点 → 位置 PID */
     //Comm_ZeroLiftWhenReady(now_ms);

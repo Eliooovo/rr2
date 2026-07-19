@@ -3,7 +3,7 @@
  * @brief   麦轮底盘控制 — 4 x DJI M3508 (FDCAN1), 速度 PID 闭环
  *
  * 数据流:
- *   上位机 → SetVelocityRpm(vx,vy,wz) → 麦轮解算 → 目标转速
+ *   上位机 → SetVelocity(vx,vy,wz) → 麦轮解算/单位换算 → 目标转速
  *   C620 反馈 → DjiMotor_HandleFeedback → g_dji_motors[].speed_rpm (中断上下文)
  *   ControlLoop: 目标转速 vs 实际转速 → PID → SetCurrent → CAN 发送
  */
@@ -23,12 +23,16 @@ static PidController s_speed_pid[CHASSIS_MOTOR_COUNT];
 static float        s_target_rpm[CHASSIS_MOTOR_COUNT];
 static uint32_t     s_last_control_ms;
 
-/* Ozone 调试用: Chassis_SetVelocityRpm() 解算后的四轮目标转速。
- * 顺序: 右前、左前、左后、右后。 */
+/* Ozone 调试用:
+ * g_chassis_cmd_* 记录最近一次速度命令输入；
+ * g_chassis_target_rpm[] 记录换算后的四轮 C620 反馈侧目标 rpm，顺序: 右前、左前、左后、右后。 */
 volatile float g_chassis_target_rpm[CHASSIS_MOTOR_COUNT];
 volatile float g_chassis_cmd_vx;
 volatile float g_chassis_cmd_vy;
 volatile float g_chassis_cmd_vw;
+volatile float g_chassis_cmd_vx_mps;
+volatile float g_chassis_cmd_vy_mps;
+volatile float g_chassis_cmd_wz_radps;
 volatile uint32_t g_chassis_set_velocity_count;
 
 /* float 电流值 → int16_t，自动限幅 */
@@ -58,6 +62,9 @@ void Chassis_Init(void)
     g_chassis_cmd_vx = 0.0f;
     g_chassis_cmd_vy = 0.0f;
     g_chassis_cmd_vw = 0.0f;
+    g_chassis_cmd_vx_mps = 0.0f;
+    g_chassis_cmd_vy_mps = 0.0f;
+    g_chassis_cmd_wz_radps = 0.0f;
     g_chassis_set_velocity_count = 0U;
 
     s_last_control_ms = 0U;
@@ -104,14 +111,65 @@ void Chassis_SetWheelTargetRpm(float rf_rpm, float lf_rpm,
 }
 
 /*
- * 麦轮逆运动学 — 车体速度 → 四轮目标转速
+ * 麦轮逆运动学 — 车体物理速度 → 四轮电机反馈侧目标转速
+ *
+ * 上位机输入:
+ *   vx_mps     前后方向速度, m/s
+ *   vy_mps     左右方向速度, m/s
+ *   wz_radps   车体 yaw 角速度, rad/s
+ *
+ * 先算每个轮子的线速度:
+ *   wheel_linear = vx ± vy ± (Lx + Ly) * wz
+ *
+ * 再把轮子线速度换成 C620 反馈侧 rpm:
+ *   wheel_rpm = wheel_linear / (2πR) * 60
+ *   motor_rpm = wheel_rpm * reduction_ratio
+ *
+ * 注意: 速度 PID 比较的是 DjiMotorState.speed_rpm，即电机反馈侧 rpm，
+ * 所以必须乘减速比 16。否则 1.5m/s 会被当成 1.5rpm，电机基本不动。
+ */
+void Chassis_SetVelocity(float vx_mps, float vy_mps, float wz_radps)
+{
+    const float rotation_radius_m = CHASSIS_HALF_LENGTH_M + CHASSIS_HALF_WIDTH_M;
+    const float rpm_per_mps =
+        (60.0f * CHASSIS_MOTOR_REDUCTION_RATIO) /
+        (2.0f * CHASSIS_PI * CHASSIS_WHEEL_RADIUS_M);
+
+    /* 调试阶段限速: 保持上位机协议单位不变，只在底盘内部降低实际执行速度。 */
+    vx_mps *= CHASSIS_LINEAR_VELOCITY_SCALE;
+    vy_mps *= CHASSIS_LINEAR_VELOCITY_SCALE;
+    wz_radps *= CHASSIS_ANGULAR_VELOCITY_SCALE;
+
+    float rf_linear = vx_mps - vy_mps - rotation_radius_m * wz_radps;
+    float lf_linear = vx_mps + vy_mps + rotation_radius_m * wz_radps;
+    float lb_linear = vx_mps + vy_mps - rotation_radius_m * wz_radps;
+    float rb_linear = vx_mps - vy_mps + rotation_radius_m * wz_radps;
+
+    g_chassis_cmd_vx_mps = vx_mps;
+    g_chassis_cmd_vy_mps = vy_mps;
+    g_chassis_cmd_wz_radps = wz_radps;
+
+    g_chassis_set_velocity_count++;
+    g_chassis_cmd_vx = vx_mps;
+    g_chassis_cmd_vy = vy_mps;
+    g_chassis_cmd_vw = wz_radps;
+
+    Chassis_SetWheelTargetRpm(rf_linear * rpm_per_mps,
+                              lf_linear * rpm_per_mps,
+                              lb_linear * rpm_per_mps,
+                              rb_linear * rpm_per_mps);
+}
+
+/*
+ * 麦轮逆运动学 — 抽象 rpm 命令 → 四轮目标转速
  *
  *   wheel1 (右前) = vx - vy - wz
  *   wheel2 (左前) = vx + vy + wz
  *   wheel3 (左后) = vx + vy - wz
  *   wheel4 (右后) = vx - vy + wz
  *
- * 参数由上位机下发的车体速度 (vx,vy,wz)，单位 rpm。
+ * 参数单位是 rpm，仅用于直接按 rpm 调试；USB 上位机 m/s/rad/s 应调用
+ * Chassis_SetVelocity()。
  */
 void Chassis_SetVelocityRpm(float vx_rpm, float vy_rpm, float wz_rpm)
 {

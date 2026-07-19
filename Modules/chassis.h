@@ -13,6 +13,23 @@ extern "C" {
 #define CHASSIS_INTEGRAL_LIMIT     30000.0f
 #define CHASSIS_OFFLINE_TIMEOUT_MS 100U
 
+/* 底盘物理参数，用于把上位机的 m/s、rad/s 转成 C620 反馈侧 rpm。
+ * 轮径 0.14m；0.58m/0.50m 是前后轮距和左右轮距，控制里使用半长/半宽。 */
+#define CHASSIS_WHEEL_DIAMETER_M      0.14f
+#define CHASSIS_WHEEL_RADIUS_M        (CHASSIS_WHEEL_DIAMETER_M * 0.5f)
+#define CHASSIS_LENGTH_M              0.58f
+#define CHASSIS_WIDTH_M               0.50f
+#define CHASSIS_HALF_LENGTH_M         (CHASSIS_LENGTH_M * 0.5f)
+#define CHASSIS_HALF_WIDTH_M          (CHASSIS_WIDTH_M * 0.5f)
+#define CHASSIS_MOTOR_REDUCTION_RATIO 16.0f
+#define CHASSIS_PI                    3.1415926535f
+
+/* 调试限速系数:
+ * 上位机仍然按 m/s、rad/s 发送，底盘内部先乘该系数再解算轮速。
+ * 只影响 Chassis_SetVelocity()，不影响直接设置 rpm 的 Chassis_SetVelocityRpm()。 */
+#define CHASSIS_LINEAR_VELOCITY_SCALE  0.2f
+#define CHASSIS_ANGULAR_VELOCITY_SCALE 0.2f
+
 /* 上电默认不自动运动。需要四轮低速试转时改为 1。 */
 #define CHASSIS_BOOT_TEST_ENABLE   0
 #define CHASSIS_BOOT_TEST_RPM      300.0f
@@ -54,6 +71,7 @@ void Chassis_SetWheelTargetRpm(float rf_rpm,
                                float lb_rpm,
                                float rb_rpm);
 
+void Chassis_SetVelocity(float vx_mps, float vy_mps, float wz_radps);
 void Chassis_SetVelocityRpm(float vx_rpm, float vy_rpm, float wz_rpm);
 float Chassis_GetWheelTargetRpm(ChassisWheelIndex wheel);
 
@@ -61,6 +79,9 @@ extern volatile float g_chassis_target_rpm[CHASSIS_MOTOR_COUNT];
 extern volatile float g_chassis_cmd_vx;
 extern volatile float g_chassis_cmd_vy;
 extern volatile float g_chassis_cmd_vw;
+extern volatile float g_chassis_cmd_vx_mps;
+extern volatile float g_chassis_cmd_vy_mps;
+extern volatile float g_chassis_cmd_wz_radps;
 extern volatile uint32_t g_chassis_set_velocity_count;
 
 #ifdef __cplusplus
