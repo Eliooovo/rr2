@@ -20,6 +20,7 @@
 #include "main.h"
 #include "fdcan.h"
 #include "usart.h"
+#include "usb_device.h"
 #include "gpio.h"
 
 /* Private includes ----------------------------------------------------------*/
@@ -104,6 +105,7 @@ int main(void)
   MX_FDCAN2_Init();
   MX_FDCAN3_Init();
   MX_USART1_UART_Init();
+  MX_USB_DEVICE_Init();
   /* USER CODE BEGIN 2 */
   DjiMotor_Init();
   Chassis_Init();
@@ -118,9 +120,9 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-   // Chassis_RunPeriodic();
+    Chassis_RunPeriodic();
 
-    Lift_RunPeriodic();
+    //Lift_RunPeriodic();
   }
   /* USER CODE END 3 */
 }

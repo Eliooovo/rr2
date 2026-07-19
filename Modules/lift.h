@@ -22,7 +22,7 @@ extern "C" {
 #define LIFT_SPEED_INTEGRAL_LIMIT    30000.0f
 
 /* 上电自测: 等待电机全部在线后，以当前位置为零点，运动到 BOOT_TEST_DEG 度 */
-#define LIFT_BOOT_TEST_ENABLE        1
+#define LIFT_BOOT_TEST_ENABLE        0
 #define LIFT_BOOT_TEST_DEG           3600.0f
 
 /* 电机索引枚举，方便传参时区分四个电机 */
