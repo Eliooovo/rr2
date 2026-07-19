@@ -62,3 +62,7 @@ Open `rr2.ioc` in STM32CubeMX to adjust pins/peripherals, then regenerate with `
   4. 四个轮子数量或底盘类型变了，比如不是四麦轮
 
   这些情况才需要改底层发送或底盘运动学。
+
+  ## 转动角度： float Lift_GetPositionDeg（） #lift.c
+      g_dji_motors[i].total_angle_deg - s_zero_offset_deg[i]
+       (电机原始累积角度，绝对累计值)         （i号lift电机启动测试时记录的零点）
