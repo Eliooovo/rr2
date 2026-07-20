@@ -18,6 +18,8 @@ enable_language(C ASM)
 add_executable(${CMAKE_PROJECT_NAME}
     Device/dji_motor.c
     Device/dji_motor.h
+    Device/rs_motor.c
+    Device/rs_motor.h
     Algorithm/pid.c
     Algorithm/pid.h
     Modules/chassis.c

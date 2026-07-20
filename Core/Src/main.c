@@ -30,6 +30,7 @@
 #include "comm_protocol.h"
 #include "dji_motor.h"
 #include "lift.h"
+#include "rs_motor.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -109,6 +110,7 @@ int main(void)
   MX_USB_DEVICE_Init();
   /* USER CODE BEGIN 2 */
   DjiMotor_Init();
+  RsMotor_Init();
   Chassis_Init();
   Lift_Init();
   bsp_can_init();

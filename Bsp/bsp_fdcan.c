@@ -17,6 +17,7 @@
 
 #include "bsp_fdcan.h"
 #include "dji_motor.h"   /* DJI 电机驱动, 解析 CAN 反馈帧 */
+#include "rs_motor.h"    /* 灵足电机驱动, 解析 FDCAN3 上的 MIT 反馈 */
 
 volatile uint32_t g_fdcan1_hal_rx_callback_count = 0U;
 
@@ -367,7 +368,7 @@ void fdcan3_rx_callback(void)
     len3 = fdcanx_receive(&hfdcan3, &rec_id3, rx_data3);
     if (len3 == 8U)
     {
-        // Process the received frame for灵足电机
+        (void)RsMotor_HandleFeedback(rec_id3, rx_data3, HAL_GetTick());
     }
 }
 
