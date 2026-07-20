@@ -22,6 +22,11 @@ static const ChassisMotorConfig s_motor_config[CHASSIS_MOTOR_COUNT] =
 static PidController s_speed_pid[CHASSIS_MOTOR_COUNT];
 static float        s_target_rpm[CHASSIS_MOTOR_COUNT];
 static uint32_t     s_last_control_ms;
+#if CHASSIS_BOOT_TEST_ENABLE
+static uint8_t      s_boot_test_active;
+static uint8_t      s_boot_test_started;
+static uint32_t     s_boot_test_start_ms;
+#endif
 
 /* Ozone 调试用:
  * g_chassis_cmd_* 记录最近一次速度命令输入；
@@ -42,6 +47,25 @@ static int16_t Chassis_FloatToCurrent(float value)
     if (value < -CHASSIS_CURRENT_LIMIT) return (int16_t)-CHASSIS_CURRENT_LIMIT;
     return (int16_t)value;
 }
+
+#if CHASSIS_BOOT_TEST_ENABLE
+/* 上电跑车测试只在四个底盘电机都持续有反馈后开始计时。
+ * 如果未在线就开始计时，前面可能只是发了目标但电机没有真正闭环运行。 */
+static uint8_t Chassis_AllMotorsRecentlyOnline(uint32_t now_ms)
+{
+    for (uint8_t i = 0U; i < CHASSIS_MOTOR_COUNT; ++i) {
+        DjiMotorState *motor = DjiMotor_GetState(s_motor_config[i].motor_id);
+
+        if (motor == 0 ||
+            motor->online == 0U ||
+            (now_ms - motor->last_update_ms) > CHASSIS_OFFLINE_TIMEOUT_MS) {
+            return 0U;
+        }
+    }
+
+    return 1U;
+}
+#endif
 
 /* ==========================================================================
  * 初始化 & 停止
@@ -70,11 +94,10 @@ void Chassis_Init(void)
     s_last_control_ms = 0U;
 
 #if CHASSIS_BOOT_TEST_ENABLE
-    /* 上电自转: 四轮同速，验证接线和方向 */
-    Chassis_SetWheelTargetRpm(CHASSIS_BOOT_TEST_RPM,
-                              CHASSIS_BOOT_TEST_RPM,
-                              CHASSIS_BOOT_TEST_RPM,
-                              CHASSIS_BOOT_TEST_RPM);
+    /* 上电跑车测试由 Chassis_RunPeriodic() 在电机全部在线后启动。 */
+    s_boot_test_active = 1U;
+    s_boot_test_started = 0U;
+    s_boot_test_start_ms = 0U;
 #else
     Chassis_Stop();
 #endif
@@ -136,14 +159,14 @@ void Chassis_SetVelocity(float vx_mps, float vy_mps, float wz_radps)
         (2.0f * CHASSIS_PI * CHASSIS_WHEEL_RADIUS_M);
 
     /* 调试阶段限速: 保持上位机协议单位不变，只在底盘内部降低实际执行速度。 */
-    vx_mps *= CHASSIS_LINEAR_VELOCITY_SCALE;
-    vy_mps *= CHASSIS_LINEAR_VELOCITY_SCALE;
-    wz_radps *= CHASSIS_ANGULAR_VELOCITY_SCALE;
+   vx_mps   *= CHASSIS_VX_SCALE;
+   vy_mps   *= CHASSIS_VY_SCALE;
+   wz_radps *= CHASSIS_VW_SCALE;
 
     float rf_linear = vx_mps - vy_mps - rotation_radius_m * wz_radps;
     float lf_linear = vx_mps + vy_mps + rotation_radius_m * wz_radps;
-    float lb_linear = vx_mps + vy_mps - rotation_radius_m * wz_radps;
-    float rb_linear = vx_mps - vy_mps + rotation_radius_m * wz_radps;
+    float lb_linear = vx_mps - vy_mps + rotation_radius_m * wz_radps;
+    float rb_linear = vx_mps + vy_mps - rotation_radius_m * wz_radps;
 
     g_chassis_cmd_vx_mps = vx_mps;
     g_chassis_cmd_vy_mps = vy_mps;
@@ -265,5 +288,24 @@ void Chassis_RunPeriodic(void)
     if (elapsed_ms < CHASSIS_CONTROL_PERIOD_MS) return;
 
     s_last_control_ms = now_ms;
+
+#if CHASSIS_BOOT_TEST_ENABLE
+    if (s_boot_test_active != 0U) {
+        if (s_boot_test_started == 0U) {
+            if (Chassis_AllMotorsRecentlyOnline(now_ms) != 0U) {
+                /* 四个电机都在线后才开始跑，并从此刻开始计 1 秒。 */
+                Chassis_SetVelocity(CHASSIS_BOOT_TEST_VX_MPS,
+                                    CHASSIS_BOOT_TEST_VY_MPS,
+                                    CHASSIS_BOOT_TEST_WZ_RADPS);
+                s_boot_test_start_ms = now_ms;
+                s_boot_test_started = 1U;
+            }
+        } else if ((now_ms - s_boot_test_start_ms) >= CHASSIS_BOOT_TEST_DURATION_MS) {
+            Chassis_Stop();
+            s_boot_test_active = 0U;
+        }
+    }
+#endif
+
     Chassis_ControlLoop((float)elapsed_ms * 0.001f);
 }

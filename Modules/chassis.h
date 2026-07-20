@@ -21,18 +21,24 @@ extern "C" {
 #define CHASSIS_WIDTH_M               0.50f
 #define CHASSIS_HALF_LENGTH_M         (CHASSIS_LENGTH_M * 0.5f)
 #define CHASSIS_HALF_WIDTH_M          (CHASSIS_WIDTH_M * 0.5f)
-#define CHASSIS_MOTOR_REDUCTION_RATIO 16.0f
+#define CHASSIS_MOTOR_REDUCTION_RATIO 19.0f
 #define CHASSIS_PI                    3.1415926535f
 
 /* 调试限速系数:
  * 上位机仍然按 m/s、rad/s 发送，底盘内部先乘该系数再解算轮速。
  * 只影响 Chassis_SetVelocity()，不影响直接设置 rpm 的 Chassis_SetVelocityRpm()。 */
-#define CHASSIS_LINEAR_VELOCITY_SCALE  0.2f
-#define CHASSIS_ANGULAR_VELOCITY_SCALE 0.2f
+#define CHASSIS_VX_SCALE    1.4f
+#define CHASSIS_VY_SCALE    1.84f
+#define CHASSIS_VW_SCALE    1.0f
 
-/* 上电默认不自动运动。需要四轮低速试转时改为 1。 */
-#define CHASSIS_BOOT_TEST_ENABLE   0
-#define CHASSIS_BOOT_TEST_RPM      300.0f
+/* 上电跑车测试:
+ * 置 1 后，等四个底盘电机反馈都在线，再按下面的物理速度跑 1 秒后自动停止。
+ * 这里的速度也会经过 CHASSIS_LINEAR/ANGULAR_VELOCITY_SCALE 限速。 */
+#define CHASSIS_BOOT_TEST_ENABLE      1
+#define CHASSIS_BOOT_TEST_DURATION_MS 20000U
+#define CHASSIS_BOOT_TEST_VX_MPS      0.0f
+#define CHASSIS_BOOT_TEST_VY_MPS      0.0f
+#define CHASSIS_BOOT_TEST_WZ_RADPS    1.07f
 
 typedef enum {
     CHASSIS_WHEEL_RF = 0,  /* 右前 */
@@ -42,7 +48,7 @@ typedef enum {
 } ChassisWheelIndex;
 
 typedef struct {
-    uint8_t motor_id;      /* C620 电调 ID: 1~8，对应反馈 ID 0x201~0x208 */
+    uint8_t motor_id;      /*CHASSIS_BOOT_TEST_VY_MPS C620 电调 ID: 1~8，对应反馈 ID 0x201~0x208 */
     int8_t direction;      /* 方向系数: 1 或 -1 */
     float speed_kp;
     float speed_ki;
