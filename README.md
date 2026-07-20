@@ -73,3 +73,90 @@ Open `rr2.ioc` in STM32CubeMX to adjust pins/peripherals, then regenerate with `
   ## 传位置：#define LIFT_BOOT_TEST_DEG           3600.0f
   aa 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 55
   aa 00 00 00 00 00 00 00 00 00 00 00 00 00 00 61 45 00 00 61 45 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 55
+
+## 模块开关与调试指南
+
+### 上电自测 (不用上位机，上电自动跑)
+
+| 文件 | 宏 | 作用 |
+|------|-----|------|
+| `Modules/chassis.h` | `CHASSIS_BOOT_TEST_ENABLE` | `1` = 上电底盘自转 1 秒后停止 |
+| `Modules/chassis.h` | `CHASSIS_BOOT_TEST_VX/VY/WZ` | 分别设为 `1.0f` 测前进/横移/旋转 (保持 0 或 1) |
+| `Modules/lift.h` | `LIFT_BOOT_TEST_ENABLE` | `1` = 上电后升降电机等在线→设零→转到 LIFT_BOOT_TEST_DEG 度 |
+| `Modules/lift.h` | `LIFT_BOOT_TEST_DEG` | 目标角度 (度)，如 `180.0f` |
+
+### 全局限速 (测试 + 上位机指令都生效)
+
+| 文件 | 宏 | 作用 |
+|------|-----|------|
+| `Modules/chassis.h` | `CHASSIS_VX_SCALE` | 前后方向限速系数 (0.0~1.0) |
+| `Modules/chassis.h` | `CHASSIS_VY_SCALE` | 左右方向限速系数 |
+| `Modules/chassis.h` | `CHASSIS_VW_SCALE` | 旋转方向限速系数 |
+
+> 电机实际速度 = 上位机/BOOT_TEST 值 × SCALE。调试时先设小值 (如 0.2)，确认方向正确后再加大。
+
+### 底盘 PID 参数
+
+| 文件 | 位置 | 说明 |
+|------|------|------|
+| `Modules/chassis.h` | `CHASSIS_MOTOR_CONFIG_INIT` | 每个电机的 `speed_kp/ki/kd`，四个值独立可调 |
+| `Modules/chassis.h` | `CHASSIS_CURRENT_LIMIT` | PID 输出电流限幅 (C620 最大 16384) |
+
+### 底盘电机方向
+
+| 文件 | 位置 | 说明 |
+|------|------|------|
+| `Modules/chassis.h` | `direction` 字段 | 试车时若某轮反转，改对应值为 `-1` |
+
+### 升降 PID 参数
+
+| 文件 | 位置 | 说明 |
+|------|------|------|
+| `Modules/lift.h` | `LIFT_MOTOR_CONFIG_INIT` | 每电机的 `position_kp/ki/kd` (位置环) + `speed_kp/ki/kd` (速度环) |
+| `Modules/lift.h` | `max_speed_rpm` | 位置环输出限幅，即最大运动速度 |
+| `Modules/lift.h` | `current_limit` | 速度环输出限幅 (C620 最大 16384) |
+
+### 串口通讯切换
+
+| 文件 | 宏 | 作用 |
+|------|-----|------|
+| `Modules/comm_protocol.h:` | `COMM_USB_TEST_FRAME_ENABLE` | `1` = 每秒发固定 46 字节测试帧验证 USB CDC 链路；`0` = 发真实反馈帧 (20ms 周期) |
+
+> 切到真实反馈帧 (`COMM_USB_TEST_FRAME_ENABLE = 0`) 且把上电自测全关 (`BOOT_TEST_ENABLE = 0`) 后，底盘和升降会完全听从 Jetson 上位机通过 USB 虚拟串口发来的指令。
+>
+> 帧格式: `0xAA` + 11 个 float (小端序) + `0x55`，共 46 字节。字段顺序见 `Modules/comm_protocol.h` 的 `CommFrameFloats`。
+
+### 升降电机 Can ID
+
+| 文件 | 位置 | 说明 |
+|------|------|------|
+| `Modules/lift.h` | `LIFT_MOTOR_CONFIG_INIT` 的 `motor_id` 字段 | 当前设为 `{1U, 2U, 3U, 4U}`，换 ID 改这里 |
+
+### 底盘麦轮公式
+
+文件 `Modules/chassis.c` (`Chassis_SetVelocity`) 和 `:204-207` (`Chassis_SetVelocityRpm`):
+
+```c
+// 标准麦轮解算 (DJI 滚子布局)，不要随意改符号
+rf = vx - vy - wz*L    // 右前
+lf = vx + vy + wz*L    // 左前
+lb = vx - vy + wz*L    // 左后
+rb = vx + vy - wz*L    // 右后
+```
+
+### 典型调试流程
+
+```
+1. CHASSIS_BOOT_TEST_ENABLE = 1, BOOT_TEST_VX=1, VY=0, WZ=0 → 确认前进方向
+   → 某轮反转? 改 direction = -1
+
+2. CHASSIS_BOOT_TEST_ENABLE = 1, VX=0, VY=1, WZ=0 → 确认横移方向
+   → 四个轮子各自转动方向正确但车体横移方向反了?
+   → 交换 VX_SCALE/VY_SCALE 的符号 (改 -0.4)
+
+3. CHASSIS_BOOT_TEST_ENABLE = 1, VX=0, VY=0, WZ=1 → 确认旋转方向
+
+4. 确认无误 → BOOT_TEST_ENABLE 全关 → COMM_USB_TEST_FRAME_ENABLE = 0
+
+5. 连 Jetson，上位机发指令控制
+```

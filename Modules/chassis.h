@@ -29,16 +29,17 @@ extern "C" {
  * 只影响 Chassis_SetVelocity()，不影响直接设置 rpm 的 Chassis_SetVelocityRpm()。 */
 #define CHASSIS_VX_SCALE    1.4f
 #define CHASSIS_VY_SCALE    1.84f
-#define CHASSIS_VW_SCALE    1.0f
+#define CHASSIS_VW_SCALE    1.07f
 
 /* 上电跑车测试:
- * 置 1 后，等四个底盘电机反馈都在线，再按下面的物理速度跑 1 秒后自动停止。
+ * 置 1 后，等四个底盘电机反馈都在线，再按下面的物理速度跑 20 秒后自动停止。这里的CHASSIS_BOOT_TEST_xyw是上电测试的时候测的东西，
+ * BOOT_TEST 只用来选方向，值保持 0 或 1，实际速度由 CHASSIS_BOOT_TEST_VX_MPS/CHASSIS_BOOT_TEST_VY_MPS/CHASSIS_BOOT_TEST_WZ_RADPS 决定。
  * 这里的速度也会经过 CHASSIS_LINEAR/ANGULAR_VELOCITY_SCALE 限速。 */
-#define CHASSIS_BOOT_TEST_ENABLE      1
+#define CHASSIS_BOOT_TEST_ENABLE      0
 #define CHASSIS_BOOT_TEST_DURATION_MS 20000U
 #define CHASSIS_BOOT_TEST_VX_MPS      0.0f
 #define CHASSIS_BOOT_TEST_VY_MPS      0.0f
-#define CHASSIS_BOOT_TEST_WZ_RADPS    1.07f
+#define CHASSIS_BOOT_TEST_WZ_RADPS    1.0f
 
 typedef enum {
     CHASSIS_WHEEL_RF = 0,  /* 右前 */

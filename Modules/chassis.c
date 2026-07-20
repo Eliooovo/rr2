@@ -15,17 +15,19 @@
 #include "pid.h"
 
 
-
-static const ChassisMotorConfig s_motor_config[CHASSIS_MOTOR_COUNT] =
-    CHASSIS_MOTOR_CONFIG_INIT;
-
+/* 四个轮子电机的配置，顺序必须和 ChassisWheelIndex 保持一致。 */
+static const ChassisMotorConfig s_motor_config[CHASSIS_MOTOR_COUNT] = CHASSIS_MOTOR_CONFIG_INIT;
 static PidController s_speed_pid[CHASSIS_MOTOR_COUNT];
 static float        s_target_rpm[CHASSIS_MOTOR_COUNT];
 static uint32_t     s_last_control_ms;
+
+/* ==========================================================================
+ * 上电跑车测试，只在 CHASSIS_BOOT_TEST_ENABLE=1 时启用
+ * ========================================================================== */
 #if CHASSIS_BOOT_TEST_ENABLE
-static uint8_t      s_boot_test_active;
-static uint8_t      s_boot_test_started;
-static uint32_t     s_boot_test_start_ms;
+static uint8_t      s_boot_test_active; // 上电跑车测试是否激活
+static uint8_t      s_boot_test_started; // 上电跑车测试是否已开始
+static uint32_t     s_boot_test_start_ms; // 上电跑车测试开始时间
 #endif
 
 /* Ozone 调试用:
@@ -276,11 +278,11 @@ void Chassis_ControlLoop(float dt_s)
  */
 void Chassis_RunPeriodic(void)
 {
-    uint32_t now_ms = HAL_GetTick();
+    uint32_t now_ms = HAL_GetTick(); //当前系统时间 (ms)，用于计算 dt_s 和记录 last_update_ms
     uint32_t elapsed_ms;
 
     if (s_last_control_ms == 0U) {
-        s_last_control_ms = now_ms;
+        s_last_control_ms = now_ms;//若是第一次跑这个函数，则初始化上次执行时间为当前时间，避免 dt_s 过大
         return;
     }
 
