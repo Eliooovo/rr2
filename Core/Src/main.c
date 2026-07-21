@@ -30,16 +30,31 @@
 #include "comm_protocol.h"
 #include "dji_motor.h"
 #include "lift.h"
+#include "rs_motor.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
+
+typedef enum {
+  RS_MOTOR_TEST_WAIT_START = 0,
+  RS_MOTOR_TEST_RUNNING,
+  RS_MOTOR_TEST_DONE,
+  RS_MOTOR_TEST_ERROR
+} RsMotorTestPhase;
 
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 
+#define RS_MOTOR_TEST_MOTOR_ID          3U
+#define RS_MOTOR_TEST_MASTER_ID         0xFDU
+#define RS_MOTOR_TEST_START_DELAY_MS    1000U
+#define RS_MOTOR_TEST_RUN_TIME_MS       2000U
+#define RS_MOTOR_TEST_CURRENT_LIMIT_A   1.0f
+#define RS_MOTOR_TEST_ACCEL_RAD_S2      2.0f
+#define RS_MOTOR_TEST_SPEED_RAD_S       1.0f
 
 /* USER CODE END PD */
 
@@ -52,6 +67,20 @@
 
 /* USER CODE BEGIN PV */
 
+static rs_motor_t s_rs_test_motor = {
+  .config = {
+    .hfdcan = &hfdcan3,
+    .motor_id = RS_MOTOR_TEST_MOTOR_ID,
+    .master_id = RS_MOTOR_TEST_MASTER_ID,
+    .motor_type = RS_MOTOR_TYPE_5,
+    .offline_timeout_ms = 100U,
+  },
+};
+
+volatile RsMotorTestPhase g_rs_motor_test_phase = RS_MOTOR_TEST_WAIT_START;
+volatile rs_motor_status_t g_rs_motor_test_status = RS_MOTOR_STATUS_NOT_INITIALIZED;
+static uint32_t s_rs_motor_test_phase_start_ms;
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -62,6 +91,62 @@ void SystemClock_Config(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+
+/**
+ * RobStride 最小上电测试：延时后低速旋转 2 秒，随后零速并失能。
+ * 任一启动报文发送失败时立即尝试失能，测试不会自动重试。
+ */
+static void RsMotor_TestRun(void)
+{
+  uint32_t now_ms = HAL_GetTick();
+
+  if (g_rs_motor_test_phase == RS_MOTOR_TEST_ERROR ||
+      g_rs_motor_test_phase == RS_MOTOR_TEST_DONE) {
+    return;
+  }
+
+  (void)rs_motor_update(&s_rs_test_motor, now_ms);
+
+  if (g_rs_motor_test_phase == RS_MOTOR_TEST_WAIT_START) {
+    if ((uint32_t)(now_ms - s_rs_motor_test_phase_start_ms) <
+        RS_MOTOR_TEST_START_DELAY_MS) {
+      return;
+    }
+
+    g_rs_motor_test_status = rs_motor_speed_control(
+        &s_rs_test_motor,
+        RS_MOTOR_TEST_CURRENT_LIMIT_A,
+        RS_MOTOR_TEST_ACCEL_RAD_S2,
+        RS_MOTOR_TEST_SPEED_RAD_S);
+    if (g_rs_motor_test_status != RS_MOTOR_STATUS_OK) {
+      (void)rs_motor_disable(&s_rs_test_motor);
+      g_rs_motor_test_phase = RS_MOTOR_TEST_ERROR;
+      return;
+    }
+
+    s_rs_motor_test_phase_start_ms = now_ms;
+    g_rs_motor_test_phase = RS_MOTOR_TEST_RUNNING;
+    return;
+  }
+
+  if ((uint32_t)(now_ms - s_rs_motor_test_phase_start_ms) >=
+      RS_MOTOR_TEST_RUN_TIME_MS) {
+    rs_motor_status_t stop_status;
+    rs_motor_status_t disable_status;
+
+    stop_status = rs_motor_speed_control(
+        &s_rs_test_motor,
+        RS_MOTOR_TEST_CURRENT_LIMIT_A,
+        RS_MOTOR_TEST_ACCEL_RAD_S2,
+        0.0f);
+    disable_status = rs_motor_disable(&s_rs_test_motor);
+
+    g_rs_motor_test_status = (stop_status != RS_MOTOR_STATUS_OK) ?
+                             stop_status : disable_status;
+    g_rs_motor_test_phase = (g_rs_motor_test_status == RS_MOTOR_STATUS_OK) ?
+                            RS_MOTOR_TEST_DONE : RS_MOTOR_TEST_ERROR;
+  }
+}
 
 /* USER CODE END 0 */
 
@@ -111,7 +196,12 @@ int main(void)
   DjiMotor_Init();
   Chassis_Init();
   Lift_Init();
+  g_rs_motor_test_status = rs_motor_init(&s_rs_test_motor);
+  if (g_rs_motor_test_status != RS_MOTOR_STATUS_OK) {
+    g_rs_motor_test_phase = RS_MOTOR_TEST_ERROR;
+  }
   bsp_can_init();
+  s_rs_motor_test_phase_start_ms = HAL_GetTick();
   Comm_Init();
   /* USER CODE END 2 */
 
@@ -125,6 +215,7 @@ int main(void)
     Comm_RunPeriodic();
     Chassis_RunPeriodic();
     Lift_RunPeriodic();
+    RsMotor_TestRun();
   }
   /* USER CODE END 3 */
 }

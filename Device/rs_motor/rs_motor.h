@@ -1,0 +1,175 @@
+#ifndef RS_MOTOR_H
+#define RS_MOTOR_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#include <stdint.h>
+
+#include "fdcan.h"
+
+/** RobStride 私有协议支持的电机参数表编号。 */
+typedef enum {
+    RS_MOTOR_TYPE_0 = 0,
+    RS_MOTOR_TYPE_1,
+    RS_MOTOR_TYPE_2,
+    RS_MOTOR_TYPE_3,
+    RS_MOTOR_TYPE_4,
+    RS_MOTOR_TYPE_5,
+    RS_MOTOR_TYPE_6,
+    RS_MOTOR_TYPE_COUNT
+} rs_motor_type_t;
+
+/** 电机反馈中的运行状态。 */
+typedef enum {
+    RS_MOTOR_RUN_STATE_REST = 0,
+    RS_MOTOR_RUN_STATE_CALIBRATING = 1,
+    RS_MOTOR_RUN_STATE_RUNNING = 2
+} rs_motor_run_state_t;
+
+/** 0x7005 参数使用的控制模式编号。 */
+typedef enum {
+    RS_MOTOR_CONTROL_MODE_MOTION = 0,
+    RS_MOTOR_CONTROL_MODE_PP_POSITION = 1,
+    RS_MOTOR_CONTROL_MODE_SPEED = 2,
+    RS_MOTOR_CONTROL_MODE_CURRENT = 3,
+    RS_MOTOR_CONTROL_MODE_ZERO = 4,
+    RS_MOTOR_CONTROL_MODE_CSP_POSITION = 5,
+    RS_MOTOR_CONTROL_MODE_NONE = 0xFF
+} rs_motor_control_mode_t;
+
+typedef enum {
+    RS_MOTOR_STATUS_OK = 0,
+    RS_MOTOR_STATUS_INVALID_ARGUMENT,
+    RS_MOTOR_STATUS_INVALID_CONFIG,
+    RS_MOTOR_STATUS_NOT_INITIALIZED,
+    RS_MOTOR_STATUS_DUPLICATE_INSTANCE,
+    RS_MOTOR_STATUS_FDCAN_TX_ERROR
+} rs_motor_status_t;
+
+/* 简短兼容名，便于在应用代码中判断返回值。 */
+#define RS_MOTOR_OK                    RS_MOTOR_STATUS_OK
+#define RS_MOTOR_ERROR_PARAM           RS_MOTOR_STATUS_INVALID_ARGUMENT
+#define RS_MOTOR_ERROR_CONFIG          RS_MOTOR_STATUS_INVALID_CONFIG
+#define RS_MOTOR_ERROR_NOT_INITIALIZED RS_MOTOR_STATUS_NOT_INITIALIZED
+#define RS_MOTOR_ERROR_DUPLICATE       RS_MOTOR_STATUS_DUPLICATE_INSTANCE
+#define RS_MOTOR_ERROR_FDCAN_TX        RS_MOTOR_STATUS_FDCAN_TX_ERROR
+
+typedef struct {
+    uint8_t uncalibrated;
+    uint8_t stall_overload;
+    uint8_t magnetic_encoder;
+    uint8_t over_temperature;
+    uint8_t drive;
+    uint8_t under_voltage;
+} rs_motor_fault_t;
+
+typedef struct {
+    float angle_rad;
+    float speed_rad_s;
+    float torque_nm;
+    float temperature_c;
+
+    rs_motor_run_state_t run_state;
+    rs_motor_fault_t fault;
+} rs_motor_feedback_t;
+
+typedef struct {
+    uint8_t online;
+    uint8_t enabled;
+    rs_motor_control_mode_t control_mode;
+
+    uint32_t feedback_count;
+    uint32_t last_update_ms;
+} rs_motor_state_t;
+
+typedef struct {
+    FDCAN_HandleTypeDef *hfdcan;
+    uint8_t motor_id;              /**< 有效范围 1..0x7f。 */
+    uint8_t master_id;
+    rs_motor_type_t motor_type;
+    uint32_t offline_timeout_ms;   /**< 必须大于 0。 */
+} rs_motor_config_t;
+
+typedef struct rs_motor rs_motor_t;
+
+/**
+ * 驱动私有数据。应用只应读取 config、feedback 和 state，不应修改此结构。
+ */
+typedef struct {
+    float position_min;
+    float position_max;
+    float speed_min;
+    float speed_max;
+    float kp_min;
+    float kp_max;
+    float kd_min;
+    float kd_max;
+    float torque_min;
+    float torque_max;
+
+    uint8_t initialized;
+    uint8_t mode_applied;
+    rs_motor_control_mode_t applied_control_mode;
+    rs_motor_t *next;
+} rs_motor_internal_t;
+
+struct rs_motor {
+    rs_motor_config_t config;
+    rs_motor_feedback_t feedback;
+    rs_motor_state_t state;
+    rs_motor_internal_t internal;
+};
+
+rs_motor_status_t rs_motor_init(rs_motor_t *motor);
+rs_motor_status_t rs_motor_deinit(rs_motor_t *motor);
+
+rs_motor_status_t rs_motor_enable(rs_motor_t *motor);
+rs_motor_status_t rs_motor_disable(rs_motor_t *motor);
+
+/** 力矩、位置、速度、Kp、Kd 顺序与 RobStride 私有协议一致。 */
+rs_motor_status_t rs_motor_motion_control(rs_motor_t *motor,
+                                          float torque_nm,
+                                          float position_rad,
+                                          float speed_rad_s,
+                                          float kp,
+                                          float kd);
+
+/** PP 模式：目标速度、加速度、目标位置。 */
+rs_motor_status_t rs_motor_pp_position_control(rs_motor_t *motor,
+                                               float speed_rad_s,
+                                               float acceleration_rad_s2,
+                                               float position_rad);
+
+/** CSP 模式：速度限制、目标位置。 */
+rs_motor_status_t rs_motor_csp_position_control(rs_motor_t *motor,
+                                                float speed_limit_rad_s,
+                                                float position_rad);
+
+/** 速度模式：电流限制、加速度、目标速度。 */
+rs_motor_status_t rs_motor_speed_control(rs_motor_t *motor,
+                                         float current_limit_a,
+                                         float acceleration_rad_s2,
+                                         float speed_rad_s);
+
+rs_motor_status_t rs_motor_current_control(rs_motor_t *motor, float current_a);
+
+/**
+ * 处理一帧 FDCAN RX FIFO 消息。
+ *
+ * @return 1 表示帧已分发给一个实例，0 表示帧非法或没有匹配实例。
+ */
+uint8_t rs_motor_handle_rx(FDCAN_HandleTypeDef *hfdcan,
+                           const FDCAN_RxHeaderTypeDef *header,
+                           const uint8_t data[8],
+                           uint32_t now_ms);
+
+/** 使用无符号时间差处理 HAL tick 回绕，并更新单个实例的在线状态。 */
+rs_motor_status_t rs_motor_update(rs_motor_t *motor, uint32_t now_ms);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* RS_MOTOR_H */

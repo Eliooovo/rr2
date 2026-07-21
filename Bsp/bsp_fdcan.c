@@ -2,10 +2,10 @@
  * @file    bsp_fdcan.c
  * @brief   FDCAN 板级支持包实现
  *
- * 为 DJI C620 电调 CAN 通信提供:
+ * 为 DJI C620 电调和 RobStride 私有协议通信提供:
  *   - CAN 初始化与滤波器配置
  *   - CAN 帧收发 (基于 HAL FDCAN 驱动)
- *   - 接收中断回调 → DJI 电机驱动层
+ *   - 接收中断回调 → 对应电机驱动层
  *
  * DJI C620 电调 CAN 协议参数:
  *   波特率:   1 Mbps (经典 CAN, 非 FD)
@@ -17,6 +17,7 @@
 
 #include "bsp_fdcan.h"
 #include "dji_motor.h"   /* DJI 电机驱动, 解析 CAN 反馈帧 */
+#include "rs_motor.h"    /* RobStride 私有协议驱动 */
 
 volatile uint32_t g_fdcan1_hal_rx_callback_count = 0U;
 
@@ -93,9 +94,9 @@ void bsp_can_init(void)
 /**
  * @brief  配置 CAN 接收滤波器
  *
- * 当前策略: 全通滤波器 (不过滤任何 ID)
- *   - FilterID1 = 0x00, FilterID2 = 0x00 即 Mask=0 全通
- *   - 所有 CAN 帧都接收，由上层软件按 ID 判断是否处理
+ * 当前策略:
+ *   - FDCAN1/2 使用标准 ID 全通掩码，接收 DJI 电调帧
+ *   - FDCAN3 使用扩展 ID 掩码，只接收 RobStride 类型 2 反馈帧
  *   - 全局过滤: 拒绝不匹配的标准/扩展 ID 及远程帧
  *
  * 配置项:
@@ -106,7 +107,7 @@ void bsp_can_init(void)
  */
 void can_filter_init(void)
 {
-    FDCAN_FilterTypeDef fdcan_filter;
+    FDCAN_FilterTypeDef fdcan_filter = {0};
 
     fdcan_filter.IdType       = FDCAN_STANDARD_ID;              /* 只处理标准帧 (11 位 ID) */
     fdcan_filter.FilterIndex  = 0;                              /* 使用滤波器 0 */
@@ -115,16 +116,27 @@ void can_filter_init(void)
     fdcan_filter.FilterID1    = 0x00;                           /* 掩码全 0 → 不过滤，所有 ID 都接收 */
     fdcan_filter.FilterID2    = 0x00;
 
-    /* 三路 CAN 都配置相同的滤波器 */
+    /* FDCAN1/2 接收 DJI 电调的标准帧。 */
     HAL_FDCAN_ConfigFilter(&hfdcan1, &fdcan_filter);
     HAL_FDCAN_ConfigFilter(&hfdcan2, &fdcan_filter);
+
+    /*
+     * FDCAN3 只把 RobStride 通信类型 2 的 29 位扩展反馈帧送入 FIFO0。
+     * CubeMX 必须把 FDCAN3 ExtFiltersNbr 配置为至少 1。
+     */
+    fdcan_filter.IdType       = FDCAN_EXTENDED_ID;
+    fdcan_filter.FilterIndex  = 0;
+    fdcan_filter.FilterType   = FDCAN_FILTER_MASK;
+    fdcan_filter.FilterConfig = FDCAN_FILTER_TO_RXFIFO0;
+    fdcan_filter.FilterID1    = (0x02UL << 24U);
+    fdcan_filter.FilterID2    = (0x1FUL << 24U);
     HAL_FDCAN_ConfigFilter(&hfdcan3, &fdcan_filter);
 
     /*
      * 全局过滤配置:
      *   拒绝不匹配的标准 ID 和扩展 ID 的帧
      *   拒绝远程帧 (C620 不使用远程帧)
-     *   注: 由于上面滤波器是全通，实际所有标准数据帧都会被接收
+     *   FDCAN1/2 的标准数据帧全通；FDCAN3 仅接收匹配的扩展反馈帧
      */
     HAL_FDCAN_ConfigGlobalFilter(&hfdcan1, FDCAN_REJECT, FDCAN_REJECT,
                                  FDCAN_REJECT_REMOTE, FDCAN_REJECT_REMOTE);
@@ -136,7 +148,7 @@ void can_filter_init(void)
     /*
      * RX FIFO0 水位线设为 1:
      *   每收到 1 帧就触发 FDCAN_IT_RX_FIFO0_NEW_MESSAGE 中断
-     *   C620 以 1kHz 上报，所以中断频率 ≈1kHz/FDCAN 总线
+     *   每个匹配帧都会及时触发对应总线的接收回调
      */
     HAL_FDCAN_ConfigFifoWatermark(&hfdcan1, FDCAN_CFG_RX_FIFO0, 1);
     HAL_FDCAN_ConfigFifoWatermark(&hfdcan2, FDCAN_CFG_RX_FIFO0, 1);
@@ -350,24 +362,25 @@ void fdcan2_rx_callback(void)
 }
 
 /*
- * FDCAN3 接收缓冲区 (灵足电机，目前暂不处理)
+ * FDCAN3 接收缓冲区 (RobStride 私有协议扩展帧)
  */
 uint8_t  rx_data3[8] = {0};
-uint16_t rec_id3;
+uint32_t rec_id3;
 
 /**
- * @brief  FDCAN3 接收回调 — 灵足电机 (TODO: 接入)
- *
- * 当前只读取 CAN 帧。灵足电机使用灵足私有 CAN 协议，
- * 不能用 DjiMotor_HandleFeedback 解析。
+ * @brief  FDCAN3 接收回调 — 分发 RobStride 私有协议反馈
  */
 void fdcan3_rx_callback(void)
 {
-    uint8_t len3;
-    len3 = fdcanx_receive(&hfdcan3, &rec_id3, rx_data3);
-    if (len3 == 8U)
-    {
-        // Process the received frame for灵足电机
+    FDCAN_RxHeaderTypeDef rx_header3;
+
+    g_fdcan3_rx_callback_count++;
+    if (HAL_FDCAN_GetRxMessage(&hfdcan3,
+                               FDCAN_RX_FIFO0,
+                               &rx_header3,
+                               rx_data3) == HAL_OK) {
+        rec_id3 = rx_header3.Identifier;
+        (void)rs_motor_handle_rx(&hfdcan3, &rx_header3, rx_data3, HAL_GetTick());
     }
 }
 

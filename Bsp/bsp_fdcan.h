@@ -1,6 +1,6 @@
 /**
  * @file    bsp_fdcan.h
- * @brief   FDCAN 板级支持包 — 底盘 CAN 总线通信层
+ * @brief   FDCAN 板级支持包 — DJI 与 RobStride CAN 通信层
  *
  * 硬件: STM32H723VGT6, 3 路 FDCAN (经典 CAN 模式, 1Mbps)
  *
@@ -12,9 +12,8 @@
  * 工作流程:
  *   发送: 上层 PID 控制循环 → DjiMotor_SetCurrent() →
  *         DjiMotor_BuildCurrentFrame() → fdcanx_send_data() → HAL FDCAN TX
- *   接收: C620 电调以 1kHz 自动上报 → HAL FDCAN RX 中断 →
- *         HAL_FDCAN_RxFifo0Callback() → fdcan1_rx_callback() →
- *         DjiMotor_HandleFeedback() → 更新 g_dji_motors[]
+ *   接收: HAL FDCAN RX 中断 → HAL_FDCAN_RxFifo0Callback() →
+ *         FDCAN1/2 分发至 DJI 驱动，FDCAN3 分发至 RobStride 实例驱动
  */
 
 #ifndef __BSP_FDCAN_H__
@@ -51,7 +50,7 @@ extern volatile uint32_t g_fdcan1_rx_error_count;
 /* CAN 总线初始化：配置滤波器 + 启动 3 路 FDCAN + 使能 RX FIFO0 中断通知 */
 void bsp_can_init(void);
 
-/* CAN 滤波器初始化：设置全通滤波器 (不过滤任何 ID) + 全局过滤配置 */
+/* CAN 滤波器初始化：FDCAN1/2 标准帧全通，FDCAN3 接收 RobStride 扩展反馈 */
 void can_filter_init(void);
 
 /* ==========================================================================
@@ -85,7 +84,7 @@ uint8_t fdcanx_receive(hcan_t *hfdcan, uint16_t *rec_id, uint8_t *buf);
  *   STM32 FDCAN 硬件接收 →
  *   HAL_FDCAN_RxFifo0Callback() (HAL 中断回调) →
  *   fdcan1_rx_callback() / fdcan2_rx_callback() / fdcan3_rx_callback() →
- *   DjiMotor_HandleFeedback() (仅 FDCAN1，底盘电机)
+ *   DjiMotor_HandleFeedback() (FDCAN1/2) / rs_motor_handle_rx() (FDCAN3)
  * ========================================================================== */
 
 void fdcan1_rx_callback(void);   /* FDCAN1 接收回调: 底盘 4 个 3508 电机反馈 */
