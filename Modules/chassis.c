@@ -47,8 +47,29 @@ static int16_t Chassis_FloatToCurrent(float value)
 {
     if (value > CHASSIS_CURRENT_LIMIT)  return (int16_t)CHASSIS_CURRENT_LIMIT;
     if (value < -CHASSIS_CURRENT_LIMIT) return (int16_t)-CHASSIS_CURRENT_LIMIT;
-    return (int16_t)value;
+    if (value >= 0.0f) return (int16_t)(value + 0.5f);
+    return (int16_t)(value - 0.5f);
 }
+
+#if CHASSIS_LOW_SPEED_COMP_ENABLE
+/* 低速补偿只在“目标速度很小但明确不为 0”时生效。
+ * 方向跟随 target_rpm，不跟随 PID 输出，避免被阻挡时 PID 输出暂时过小导致补偿方向丢失。 */
+static float Chassis_ApplyLowSpeedCompensation(float target_rpm, float current_cmd)
+{
+    float abs_target = (target_rpm >= 0.0f) ? target_rpm : -target_rpm;
+    float abs_current = (current_cmd >= 0.0f) ? current_cmd : -current_cmd;
+
+    if (abs_target < CHASSIS_TARGET_DEADBAND_RPM || abs_target > CHASSIS_LOW_SPEED_RPM) {
+        return current_cmd;
+    }
+
+    if (abs_current >= CHASSIS_MIN_DRIVE_CURRENT) {
+        return current_cmd;
+    }
+
+    return (target_rpm >= 0.0f) ? CHASSIS_MIN_DRIVE_CURRENT : -CHASSIS_MIN_DRIVE_CURRENT;
+}
+#endif
 
 #if CHASSIS_BOOT_TEST_ENABLE
 /* 上电跑车测试只在四个底盘电机都持续有反馈后开始计时。
@@ -246,8 +267,11 @@ void Chassis_ControlLoop(float dt_s)
             /* 在线: 速度环 PID */
             float target  = s_target_rpm[i] * (float)s_motor_config[i].direction;
             float feedback = (float)motor->speed_rpm;
-            current = Chassis_FloatToCurrent(
-                Pid_Update(&s_speed_pid[i], target, feedback, dt_s));
+            float current_cmd = Pid_Update(&s_speed_pid[i], target, feedback, dt_s);
+#if CHASSIS_LOW_SPEED_COMP_ENABLE
+            current_cmd = Chassis_ApplyLowSpeedCompensation(target, current_cmd);
+#endif
+            current = Chassis_FloatToCurrent(current_cmd);
         } else {
             /* 离线: 复位以避免恢复时积分冲击 */
             Pid_Reset(&s_speed_pid[i]);

@@ -45,8 +45,8 @@ void MX_FDCAN1_Init(void)
   hfdcan1.Init.ProtocolException = DISABLE;
   hfdcan1.Init.NominalPrescaler = 1;
   hfdcan1.Init.NominalSyncJumpWidth = 20;
-  hfdcan1.Init.NominalTimeSeg1 = 59;
-  hfdcan1.Init.NominalTimeSeg2 = 20;
+  hfdcan1.Init.NominalTimeSeg1 = 33;
+  hfdcan1.Init.NominalTimeSeg2 = 14;
   hfdcan1.Init.DataPrescaler = 1;
   hfdcan1.Init.DataSyncJumpWidth = 1;
   hfdcan1.Init.DataTimeSeg1 = 1;
@@ -93,8 +93,8 @@ void MX_FDCAN2_Init(void)
   hfdcan2.Init.ProtocolException = DISABLE;
   hfdcan2.Init.NominalPrescaler = 1;
   hfdcan2.Init.NominalSyncJumpWidth = 20;
-  hfdcan2.Init.NominalTimeSeg1 = 59;
-  hfdcan2.Init.NominalTimeSeg2 = 20;
+  hfdcan2.Init.NominalTimeSeg1 = 33;
+  hfdcan2.Init.NominalTimeSeg2 = 14;
   hfdcan2.Init.DataPrescaler = 1;
   hfdcan2.Init.DataSyncJumpWidth = 1;
   hfdcan2.Init.DataTimeSeg1 = 1;
@@ -141,8 +141,8 @@ void MX_FDCAN3_Init(void)
   hfdcan3.Init.ProtocolException = DISABLE;
   hfdcan3.Init.NominalPrescaler = 1;
   hfdcan3.Init.NominalSyncJumpWidth = 20;
-  hfdcan3.Init.NominalTimeSeg1 = 59;
-  hfdcan3.Init.NominalTimeSeg2 = 20;
+  hfdcan3.Init.NominalTimeSeg1 = 33;
+  hfdcan3.Init.NominalTimeSeg2 = 14;
   hfdcan3.Init.DataPrescaler = 1;
   hfdcan3.Init.DataSyncJumpWidth = 1;
   hfdcan3.Init.DataTimeSeg1 = 1;
