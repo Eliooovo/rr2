@@ -28,7 +28,7 @@ extern "C" {
 #define KFS_CONTROL_PERIOD_MS          20U
 #define KFS_OFFLINE_TIMEOUT_MS         100U
 
-#define KFS_LIFT_MOTOR_ID              1U
+#define KFS_LIFT_MOTOR_ID              3U
 #define KFS_LIFT_MOTOR_MODEL           RS_MOTOR_MODEL_RS00
 #define KFS_LIFT_DIRECTION             1
 #define KFS_LIFT_DEFAULT_SPEED_DEG_S   90.0f
@@ -51,7 +51,7 @@ extern "C" {
  * ========================================================================== */
 #define KFS_LIFT_BOOT_TEST_ENABLE       1U
 #define KFS_LIFT_BOOT_TEST_DELAY_MS     1000U
-#define KFS_LIFT_BOOT_TEST_TARGET_DEG   10.0f
+#define KFS_LIFT_BOOT_TEST_TARGET_DEG   90.0f
 #define KFS_LIFT_BOOT_TEST_SPEED_DEG_S  30.0f
 
 typedef enum {

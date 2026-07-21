@@ -147,8 +147,8 @@ uint8_t RsMotor_BuildPrivateRunModeFrame(uint8_t motor_id, uint8_t run_mode,
                                          uint32_t *ext_id, uint8_t data[8]);
 uint8_t RsMotor_BuildPrivateParamWriteFrame(uint8_t motor_id, uint16_t index, float value,
                                             uint32_t *ext_id, uint8_t data[8]);
-uint8_t RsMotor_BuildPrivatePositionFrame(uint8_t motor_id, float position_rad,
-                                          float limit_spd_rad_s, uint32_t *ext_id, uint8_t data[8]);
+uint8_t RsMotor_BuildPrivatePositionFrame(uint8_t motor_id_, float position_rad,
+                                          float limit_spd_rads, uint32_t *ext_id, uint8_t data[8]);
 
 uint8_t RsMotor_BuildPositionFrame(uint8_t motor_id, float position_deg, float max_speed_deg_s,
                                    uint16_t *std_id, uint8_t data[8]);
