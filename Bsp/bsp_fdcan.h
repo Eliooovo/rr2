@@ -43,6 +43,13 @@ extern volatile uint32_t g_fdcan1_warning;
 extern volatile uint32_t g_fdcan1_bus_off;
 extern volatile uint32_t g_fdcan1_tx_error_count;
 extern volatile uint32_t g_fdcan1_rx_error_count;
+extern volatile uint32_t g_fdcan3_rx_callback_count;
+extern volatile uint32_t g_fdcan3_receive_ok_count;
+extern volatile uint32_t g_fdcan3_receive_len;
+extern volatile uint32_t g_fdcan3_last_id;
+extern volatile uint32_t g_fdcan3_last_is_extended;
+extern volatile uint32_t g_fdcan3_rs_feedback_count;
+extern volatile uint32_t g_fdcan3_non_rs_count;
 
 /* ==========================================================================
  * 初始化
@@ -67,6 +74,7 @@ void can_filter_init(void);
  * @return  0=成功, 1=失败 (长度超限或 HAL 发送失败)
  */
 uint8_t fdcanx_send_data(hcan_t *hfdcan, uint16_t id, uint8_t *data, uint32_t len);
+uint8_t fdcanx_send_ext_data(hcan_t *hfdcan, uint32_t id, uint8_t *data, uint32_t len);
 
 /**
  * @brief  从 FDCAN RX FIFO0 读取一帧数据
@@ -76,6 +84,7 @@ uint8_t fdcanx_send_data(hcan_t *hfdcan, uint16_t id, uint8_t *data, uint32_t le
  * @return 实际接收的数据长度 (字节), 0 表示 FIFO 空或读取失败
  */
 uint8_t fdcanx_receive(hcan_t *hfdcan, uint16_t *rec_id, uint8_t *buf);
+uint8_t fdcanx_receive_any(hcan_t *hfdcan, uint32_t *rec_id, uint8_t *is_extended, uint8_t *buf);
 
 /* ==========================================================================
  * CAN 接收回调 (中断上下文调用)

@@ -29,6 +29,7 @@
 #include "chassis.h"
 #include "comm_protocol.h"
 #include "dji_motor.h"
+#include "kfs.h"
 #include "lift.h"
 #include "rs_motor.h"
 /* USER CODE END Includes */
@@ -112,6 +113,7 @@ int main(void)
   DjiMotor_Init();
   RsMotor_Init();
   Chassis_Init();
+  Kfs_Init();
   Lift_Init();
   bsp_can_init();
   Comm_Init();
@@ -124,9 +126,10 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    Comm_RunPeriodic();
-    Chassis_RunPeriodic();
-    Lift_RunPeriodic();
+   // Comm_RunPeriodic();
+    //Chassis_RunPeriodic();
+    Kfs_RunPeriodic();
+    //Lift_RunPeriodic();
   }
   /* USER CODE END 3 */
 }

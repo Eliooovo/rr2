@@ -24,6 +24,8 @@ add_executable(${CMAKE_PROJECT_NAME}
     Algorithm/pid.h
     Modules/chassis.c
     Modules/chassis.h
+    Modules/kfs.c
+    Modules/kfs.h
     Modules/lift.c
     Modules/lift.h
     Modules/comm_protocol.c

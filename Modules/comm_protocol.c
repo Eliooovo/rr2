@@ -15,6 +15,7 @@
 
 #include "chassis.h"
 #include "dji_motor.h"
+#include "kfs.h"
 #include "lift.h"
 #include "main.h"
 #include "stm32h7xx_hal.h"
@@ -247,7 +248,10 @@ static void Comm_ApplyCommand(void)
         Lift_SetTargetPositionDeg(COMM_LIFT_PAIR_REAR_B,  s_last_command.rear_lift);
     }
 
-    /* KFS 和端头字段暂存，等灵足/舵机驱动完成后接入 */
+    /* KFS 升降: RS00 内部位置 PID，直接下发目标角度。 */
+    Kfs_SetLiftTargetDeg(s_last_command.kfs_lift);
+
+    /* 其他 KFS/端头字段后续按同样方式接入 kfs 模块。 */
 }
 
 /* ==========================================================================
@@ -279,8 +283,8 @@ static void Comm_PackFeedback(uint8_t packet[COMM_PACKET_SIZE])
         feedback.rear_lift  = 0.0f;
     }
 
-    /* 灵足/端头字段暂为 0 */
-    feedback.kfs_lift        = 0.0f;
+    /* KFS 升降反馈来自 RS00 多圈位置。 */
+    feedback.kfs_lift        = Kfs_GetLiftPositionDeg();
     feedback.kfs_root_rotate = 0.0f;
     feedback.kfs_end_rotate  = 0.0f;
     feedback.kfs_grip        = 0.0f;

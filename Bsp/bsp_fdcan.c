@@ -31,15 +31,38 @@ volatile uint32_t g_fdcan1_last_id = 0U;
 volatile uint32_t g_fdcan1_dji_feedback_count = 0U;
 volatile uint32_t g_fdcan1_non_dji_count = 0U;
 volatile uint32_t g_fdcan1_send_ok_count = 0U;
+volatile uint32_t g_fdcan2_send_ok_count = 0U;
+volatile uint32_t g_fdcan3_send_ok_count = 0U;
+
 volatile uint32_t g_fdcan1_send_fail_count = 0U;
 volatile uint32_t g_fdcan1_tx_fifo_free_level = 0U;
+volatile uint32_t g_fdcan3_tx_fifo_free_level = 0U;
 volatile uint32_t g_fdcan1_hal_error = 0U;
+volatile uint32_t g_fdcan3_hal_error = 0U;
 volatile uint32_t g_fdcan1_last_error_code = 0U;
+volatile uint32_t g_fdcan3_last_error_code = 0U;
+
 volatile uint32_t g_fdcan1_error_passive = 0U;
+volatile uint32_t g_fdcan3_error_passive = 0U;
+
 volatile uint32_t g_fdcan1_warning = 0U;
+volatile uint32_t g_fdcan3_warning = 0U;
+
 volatile uint32_t g_fdcan1_bus_off = 0U;
+volatile uint32_t g_fdcan3_bus_off = 0U;
+
 volatile uint32_t g_fdcan1_tx_error_count = 0U;
+volatile uint32_t g_fdcan3_tx_error_count = 0U;
+
 volatile uint32_t g_fdcan1_rx_error_count = 0U;
+volatile uint32_t g_fdcan3_rx_error_count = 0U;
+
+volatile uint32_t g_fdcan3_receive_ok_count = 0U;
+volatile uint32_t g_fdcan3_receive_len = 0U;
+volatile uint32_t g_fdcan3_last_id = 0U;
+volatile uint32_t g_fdcan3_last_is_extended = 0U;
+volatile uint32_t g_fdcan3_rs_feedback_count = 0U;
+volatile uint32_t g_fdcan3_non_rs_count = 0U;
 
 static void fdcan1_update_debug_status(void)
 {
@@ -61,7 +84,27 @@ static void fdcan1_update_debug_status(void)
         g_fdcan1_rx_error_count = error_counters.RxErrorCnt;
     }
 }
+//函数用于更新 FDCAN3 的调试状态，包括获取 TX FIFO 空闲级别、错误状态、协议状态和错误计数器等信息，并将其存储在全局变量中，以便调试和监控 FDCAN3 的运行状态。
+static void fdcan3_update_debug_status(void)
+{
+    FDCAN_ProtocolStatusTypeDef protocol_status;
+    FDCAN_ErrorCountersTypeDef error_counters;
 
+    g_fdcan3_tx_fifo_free_level = HAL_FDCAN_GetTxFifoFreeLevel(&hfdcan3);
+    g_fdcan3_hal_error = HAL_FDCAN_GetError(&hfdcan3);
+
+    if (HAL_FDCAN_GetProtocolStatus(&hfdcan3, &protocol_status) == HAL_OK) {
+        g_fdcan3_last_error_code = protocol_status.LastErrorCode;
+        g_fdcan3_error_passive = protocol_status.ErrorPassive;
+        g_fdcan3_warning = protocol_status.Warning;
+        g_fdcan3_bus_off = protocol_status.BusOff;
+    }
+    // 获取 FDCAN3 的错误计数器信息，包括发送错误计数和接收错误计数，并将其存储在全局变量中，以便调试和监控 FDCAN3 的运行状态。
+    if (HAL_FDCAN_GetErrorCounters(&hfdcan3, &error_counters) == HAL_OK) {
+        g_fdcan3_tx_error_count = error_counters.TxErrorCnt;
+        g_fdcan3_rx_error_count = error_counters.RxErrorCnt;
+    }
+}
 /* ==========================================================================
  * CAN 初始化
  * ========================================================================== */
@@ -119,6 +162,16 @@ void can_filter_init(void)
     /* 三路 CAN 都配置相同的滤波器 */
     HAL_FDCAN_ConfigFilter(&hfdcan1, &fdcan_filter);
     HAL_FDCAN_ConfigFilter(&hfdcan2, &fdcan_filter);
+    HAL_FDCAN_ConfigFilter(&hfdcan3, &fdcan_filter);
+
+    /* FDCAN3 接灵足电机。灵足默认私有协议使用 29 位扩展帧，所以这里
+     * 给 FDCAN3 额外配置一个扩展帧全通滤波器。 */
+    fdcan_filter.IdType       = FDCAN_EXTENDED_ID;
+    fdcan_filter.FilterIndex  = 0;
+    fdcan_filter.FilterType   = FDCAN_FILTER_MASK;
+    fdcan_filter.FilterConfig = FDCAN_FILTER_TO_RXFIFO0;
+    fdcan_filter.FilterID1    = 0x00000000U;
+    fdcan_filter.FilterID2    = 0x00000000U;
     HAL_FDCAN_ConfigFilter(&hfdcan3, &fdcan_filter);
 
     /*
@@ -200,7 +253,37 @@ uint8_t fdcanx_send_data(hcan_t *hfdcan, uint16_t id, uint8_t *data, uint32_t le
         g_fdcan1_send_ok_count++;
         fdcan1_update_debug_status();
     }
-    return 0;
+    if (hfdcan == &hfdcan2) {
+        g_fdcan2_send_ok_count++;
+    }
+    if (hfdcan == &hfdcan3) {
+        g_fdcan3_send_ok_count++;
+        fdcan3_update_debug_status();
+    }
+        return 0;
+
+}
+
+uint8_t fdcanx_send_ext_data(hcan_t *hfdcan, uint32_t id, uint8_t *data, uint32_t len)
+{
+    FDCAN_TxHeaderTypeDef pTxHeader;
+
+    pTxHeader.Identifier          = id & 0x1FFFFFFFU;
+    pTxHeader.IdType              = FDCAN_EXTENDED_ID;
+    pTxHeader.TxFrameType         = FDCAN_DATA_FRAME;
+
+    if (len > 8) {
+        return 1;
+    }
+    pTxHeader.DataLength          = FDCAN_DLC_BYTES_8;
+
+    pTxHeader.ErrorStateIndicator = FDCAN_ESI_ACTIVE;
+    pTxHeader.BitRateSwitch       = FDCAN_BRS_OFF;
+    pTxHeader.FDFormat            = FDCAN_CLASSIC_CAN;
+    pTxHeader.TxEventFifoControl  = FDCAN_NO_TX_EVENTS;
+    pTxHeader.MessageMarker       = 0;
+
+    return (HAL_FDCAN_AddMessageToTxFifoQ(hfdcan, &pTxHeader, data) == HAL_OK) ? 0U : 1U;
 }
 
 /* ==========================================================================
@@ -253,6 +336,40 @@ uint8_t fdcanx_receive(hcan_t *hfdcan, uint16_t *rec_id, uint8_t *buf)
         return len;
     }
     return 0;
+}
+
+uint8_t fdcanx_receive_any(hcan_t *hfdcan, uint32_t *rec_id, uint8_t *is_extended, uint8_t *buf)
+{
+    FDCAN_RxHeaderTypeDef pRxHeader;
+    uint8_t len;
+
+    if (HAL_FDCAN_GetRxMessage(hfdcan, FDCAN_RX_FIFO0, &pRxHeader, buf) != HAL_OK) {
+        return 0U;
+    }
+
+    *rec_id = pRxHeader.Identifier;
+    *is_extended = (pRxHeader.IdType == FDCAN_EXTENDED_ID) ? 1U : 0U;
+
+    if (pRxHeader.DataLength <= FDCAN_DLC_BYTES_8)
+        len = pRxHeader.DataLength;
+    else if (pRxHeader.DataLength == FDCAN_DLC_BYTES_12)
+        len = 12;
+    else if (pRxHeader.DataLength == FDCAN_DLC_BYTES_16)
+        len = 16;
+    else if (pRxHeader.DataLength == FDCAN_DLC_BYTES_20)
+        len = 20;
+    else if (pRxHeader.DataLength == FDCAN_DLC_BYTES_24)
+        len = 24;
+    else if (pRxHeader.DataLength == FDCAN_DLC_BYTES_32)
+        len = 32;
+    else if (pRxHeader.DataLength == FDCAN_DLC_BYTES_48)
+        len = 48;
+    else if (pRxHeader.DataLength == FDCAN_DLC_BYTES_64)
+        len = 64;
+    else
+        len = 0;
+
+    return len;
 }
 
 
@@ -354,7 +471,8 @@ void fdcan2_rx_callback(void)
  * FDCAN3 接收缓冲区 (灵足电机，目前暂不处理)
  */
 uint8_t  rx_data3[8] = {0};
-uint16_t rec_id3;
+uint32_t rec_id3;
+uint8_t  rec_id3_is_extended;
 
 /**
  * @brief  FDCAN3 接收回调 — 灵足电机 (TODO: 接入)
@@ -365,10 +483,28 @@ uint16_t rec_id3;
 void fdcan3_rx_callback(void)
 {
     uint8_t len3;
-    len3 = fdcanx_receive(&hfdcan3, &rec_id3, rx_data3);
+    uint8_t motor_id = 0U;
+
+    g_fdcan3_rx_callback_count++;
+    len3 = fdcanx_receive_any(&hfdcan3, &rec_id3, &rec_id3_is_extended, rx_data3);
+    g_fdcan3_receive_len = len3;
+    g_fdcan3_last_id = rec_id3;
+    g_fdcan3_last_is_extended = rec_id3_is_extended;
+
     if (len3 == 8U)
     {
-        (void)RsMotor_HandleFeedback(rec_id3, rx_data3, HAL_GetTick());
+        g_fdcan3_receive_ok_count++;
+        if (rec_id3_is_extended != 0U) {
+            motor_id = RsMotor_HandlePrivateFeedback(rec_id3, rx_data3, HAL_GetTick());
+        } else {
+            motor_id = RsMotor_HandleFeedback((uint16_t)rec_id3, rx_data3, HAL_GetTick());
+        }
+
+        if (motor_id != 0U) {
+            g_fdcan3_rs_feedback_count++;
+        } else {
+            g_fdcan3_non_rs_count++;
+        }
     }
 }
 

@@ -120,11 +120,13 @@ uint8_t RsMotor_SetCustomModelParams(uint8_t motor_id, const RsMotorModelParams 
 RsMotorState *RsMotor_GetState(uint8_t motor_id);
 
 uint8_t RsMotor_IsFeedbackId(uint16_t std_id);
+uint8_t RsMotor_IsPrivateFeedbackId(uint32_t ext_id);
 uint8_t RsMotor_SetHostId(uint8_t host_id);
 uint8_t RsMotor_GetHostId(void);
 
 /* 在 FDCAN3 接收回调里调用。返回解析到的 motor_id，非灵足反馈返回 0。 */
 uint8_t RsMotor_HandleFeedback(uint16_t std_id, const uint8_t data[8], uint32_t now_ms);
+uint8_t RsMotor_HandlePrivateFeedback(uint32_t ext_id, const uint8_t data[8], uint32_t now_ms);
 
 void RsMotor_SetZeroToCurrent(uint8_t motor_id);
 uint8_t RsMotor_SetTargetPositionDeg(uint8_t motor_id, float position_deg, float max_speed_deg_s);
@@ -138,6 +140,15 @@ uint8_t RsMotor_BuildSetRunModeFrame(uint8_t motor_id, RsMotorRunMode mode,
                                      uint16_t *std_id, uint8_t data[8]);
 uint8_t RsMotor_BuildSetProtocolFrame(uint8_t motor_id, RsMotorProtocol protocol,
                                       uint16_t *std_id, uint8_t data[8]);
+
+uint8_t RsMotor_BuildPrivateEnableFrame(uint8_t motor_id, uint32_t *ext_id, uint8_t data[8]);
+uint8_t RsMotor_BuildPrivateStopFrame(uint8_t motor_id, uint32_t *ext_id, uint8_t data[8]);
+uint8_t RsMotor_BuildPrivateRunModeFrame(uint8_t motor_id, uint8_t run_mode,
+                                         uint32_t *ext_id, uint8_t data[8]);
+uint8_t RsMotor_BuildPrivateParamWriteFrame(uint8_t motor_id, uint16_t index, float value,
+                                            uint32_t *ext_id, uint8_t data[8]);
+uint8_t RsMotor_BuildPrivatePositionFrame(uint8_t motor_id, float position_rad,
+                                          float limit_spd_rad_s, uint32_t *ext_id, uint8_t data[8]);
 
 uint8_t RsMotor_BuildPositionFrame(uint8_t motor_id, float position_deg, float max_speed_deg_s,
                                    uint16_t *std_id, uint8_t data[8]);

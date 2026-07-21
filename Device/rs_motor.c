@@ -105,6 +105,13 @@ static uint16_t RsMotor_MakeModeId(uint8_t mode, uint8_t motor_id)
     return (uint16_t)((((uint16_t)mode & 0x7U) << 8U) | (uint16_t)motor_id);
 }
 
+static uint32_t RsMotor_MakePrivateExtId(uint8_t mode, uint8_t motor_id)
+{
+    return (((uint32_t)mode & 0x1FU) << 24U) |
+           (((uint32_t)s_host_id & 0xFFU) << 8U) |
+           (uint32_t)motor_id;
+}
+
 static uint8_t RsMotor_PrepareSimpleFrame(uint8_t motor_id, uint16_t *std_id, uint8_t data[8])
 {
     if (!RsMotor_IsValidMotorId(motor_id) || std_id == 0 || data == 0) {
@@ -228,6 +235,14 @@ uint8_t RsMotor_IsFeedbackId(uint16_t std_id)
     return (std_id == (uint16_t)s_host_id) ? 1U : 0U;
 }
 
+uint8_t RsMotor_IsPrivateFeedbackId(uint32_t ext_id)
+{
+    uint8_t mode = (uint8_t)((ext_id >> 24U) & 0x1FU);
+    uint8_t host_id = (uint8_t)(ext_id & 0xFFU);
+
+    return (mode == 2U && host_id == s_host_id) ? 1U : 0U;
+}
+
 /* ==========================================================================
  * 反馈解析
  * ========================================================================== */
@@ -310,6 +325,84 @@ uint8_t RsMotor_HandleFeedback(uint16_t std_id, const uint8_t data[8], uint32_t 
     }
     motor->temperature_c = (float)temp_u * 0.1f;
 
+    motor->update_count++;
+    motor->last_update_ms = now_ms;
+
+    return motor_id;
+}
+
+uint8_t RsMotor_HandlePrivateFeedback(uint32_t ext_id, const uint8_t data[8], uint32_t now_ms)
+{
+    uint8_t mode;
+    uint8_t motor_id;
+    uint8_t host_id;
+    RsMotorState *motor;
+    const RsMotorModelParams *params;
+    uint16_t pos_u16;
+    uint16_t speed_u16;
+    uint16_t torque_u16;
+    uint16_t temp_u16;
+    float raw_position_rad;
+    float span_rad;
+    float half_span_rad;
+
+    if (!RsMotor_IsPrivateFeedbackId(ext_id) || data == 0) {
+        return 0U;
+    }
+
+    mode = (uint8_t)((ext_id >> 24U) & 0x1FU);
+    host_id = (uint8_t)(ext_id & 0xFFU);
+    motor_id = (uint8_t)((ext_id >> 8U) & 0xFFU);
+
+    if (mode != 2U || host_id != s_host_id || !RsMotor_IsValidMotorId(motor_id)) {
+        return 0U;
+    }
+
+    motor = &g_rs_motors[motor_id - 1U];
+    params = &s_model_params[motor_id - 1U];
+
+    pos_u16 = (uint16_t)(((uint16_t)data[0] << 8U) | (uint16_t)data[1]);
+    speed_u16 = (uint16_t)(((uint16_t)data[2] << 8U) | (uint16_t)data[3]);
+    torque_u16 = (uint16_t)(((uint16_t)data[4] << 8U) | (uint16_t)data[5]);
+    temp_u16 = (uint16_t)(((uint16_t)data[6] << 8U) | (uint16_t)data[7]);
+
+    raw_position_rad = RsMotor_UintToFloat(pos_u16,
+                                           params->position_min_rad,
+                                           params->position_max_rad,
+                                           16U);
+
+    if (motor->online != 0U) {
+        float diff = raw_position_rad - motor->raw_position_rad;
+        span_rad = params->position_max_rad - params->position_min_rad;
+        half_span_rad = span_rad * 0.5f;
+        if (diff > half_span_rad) {
+            motor->wrap_count--;
+        } else if (diff < -half_span_rad) {
+            motor->wrap_count++;
+        }
+    }
+
+    span_rad = params->position_max_rad - params->position_min_rad;
+    motor->online = 1U;
+    motor->last_raw_position_rad = motor->raw_position_rad;
+    motor->raw_position_rad = raw_position_rad;
+    motor->total_position_rad = raw_position_rad + (float)motor->wrap_count * span_rad;
+    motor->total_angle_deg = motor->total_position_rad * RS_MOTOR_DEG_PER_RAD;
+    motor->position_rad = motor->total_position_rad - motor->zero_offset_rad;
+    motor->angle_deg = motor->position_rad * RS_MOTOR_DEG_PER_RAD;
+    motor->speed_rad_s = RsMotor_UintToFloat(speed_u16,
+                                             params->speed_min_rad_s,
+                                             params->speed_max_rad_s,
+                                             16U);
+    motor->speed_deg_s = motor->speed_rad_s * RS_MOTOR_DEG_PER_RAD;
+    motor->torque_nm = RsMotor_UintToFloat(torque_u16,
+                                           params->torque_min_nm,
+                                           params->torque_max_nm,
+                                           16U);
+    motor->temperature_c = (float)temp_u16 * 0.1f;
+    motor->mode_state = mode;
+    motor->fault = 0U;
+    motor->warning = 0U;
     motor->update_count++;
     motor->last_update_ms = now_ms;
 
@@ -404,6 +497,76 @@ uint8_t RsMotor_BuildSetProtocolFrame(uint8_t motor_id, RsMotorProtocol protocol
 
     data[6] = (uint8_t)protocol;
     data[7] = 0xFDU;
+    return 1U;
+}
+
+uint8_t RsMotor_BuildPrivateEnableFrame(uint8_t motor_id, uint32_t *ext_id, uint8_t data[8])
+{
+    if (!RsMotor_IsValidMotorId(motor_id) || ext_id == 0 || data == 0) {
+        return 0U;
+    }
+
+    *ext_id = RsMotor_MakePrivateExtId(3U, motor_id);
+    RsMotor_FillBytes(data, 0x00U);
+    return 1U;
+}
+
+uint8_t RsMotor_BuildPrivateStopFrame(uint8_t motor_id, uint32_t *ext_id, uint8_t data[8])
+{
+    if (!RsMotor_IsValidMotorId(motor_id) || ext_id == 0 || data == 0) {
+        return 0U;
+    }
+
+    *ext_id = RsMotor_MakePrivateExtId(4U, motor_id);
+    RsMotor_FillBytes(data, 0x00U);
+    return 1U;
+}
+
+uint8_t RsMotor_BuildPrivateRunModeFrame(uint8_t motor_id, uint8_t run_mode,
+                                         uint32_t *ext_id, uint8_t data[8])
+{
+    uint16_t index = 0x7005U;
+
+    if (!RsMotor_IsValidMotorId(motor_id) || ext_id == 0 || data == 0) {
+        return 0U;
+    }
+
+    *ext_id = RsMotor_MakePrivateExtId(0x12U, motor_id);
+    RsMotor_FillBytes(data, 0x00U);
+    data[0] = (uint8_t)(index & 0xFFU);
+    data[1] = (uint8_t)((index >> 8U) & 0xFFU);
+    data[4] = run_mode;
+    return 1U;
+}
+
+uint8_t RsMotor_BuildPrivateParamWriteFrame(uint8_t motor_id, uint16_t index, float value,
+                                            uint32_t *ext_id, uint8_t data[8])
+{
+    if (!RsMotor_IsValidMotorId(motor_id) || ext_id == 0 || data == 0) {
+        return 0U;
+    }
+
+    *ext_id = RsMotor_MakePrivateExtId(0x12U, motor_id);
+    RsMotor_FillBytes(data, 0x00U);
+    data[0] = (uint8_t)(index & 0xFFU);
+    data[1] = (uint8_t)((index >> 8U) & 0xFFU);
+    RsMotor_WriteFloatLe(value, &data[4]);
+    return 1U;
+}
+
+uint8_t RsMotor_BuildPrivatePositionFrame(uint8_t motor_id, float position_rad,
+                                          float limit_spd_rad_s, uint32_t *ext_id, uint8_t data[8])
+{
+    if (!RsMotor_IsValidMotorId(motor_id) || ext_id == 0 || data == 0) {
+        return 0U;
+    }
+
+    *ext_id = RsMotor_MakePrivateExtId(0x12U, motor_id);
+    RsMotor_FillBytes(data, 0x00U);
+    data[0] = 0x16U;
+    data[1] = 0x70U;
+    RsMotor_WriteFloatLe(position_rad, &data[4]);
+    (void)limit_spd_rad_s;
     return 1U;
 }
 
