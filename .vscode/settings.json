@@ -1,8 +1,5 @@
 {
-    "cmake.cmakePath": "cube-cmake",
-    "cmake.configureArgs": [
-        "-DCMAKE_COMMAND=cube-cmake"
-    ],
+    "cmake.cmakePath": "/usr/bin/cmake",
     "cmake.preferredGenerators": [
         "Ninja"
     ],

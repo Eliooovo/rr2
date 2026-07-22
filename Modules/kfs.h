@@ -49,9 +49,9 @@ extern "C" {
  * 确认方向、限位、急停方式都没问题后，再测试 361deg 等多圈目标。
  * 正式由上位机控制时，把 KFS_LIFT_BOOT_TEST_ENABLE 改回 0。
  * ========================================================================== */
-#define KFS_LIFT_BOOT_TEST_ENABLE       0U
+#define KFS_LIFT_BOOT_TEST_ENABLE       1U
 #define KFS_LIFT_BOOT_TEST_DELAY_MS     1000U
-#define KFS_LIFT_BOOT_TEST_TARGET_DEG   90.0f
+#define KFS_LIFT_BOOT_TEST_TARGET_DEG   180.0f
 #define KFS_LIFT_BOOT_TEST_SPEED_DEG_S  30.0f
 
 typedef enum {
