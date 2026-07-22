@@ -20,12 +20,14 @@ add_executable(${CMAKE_PROJECT_NAME}
     Device/dji_motor.h
     Device/rs_motor.c
     Device/rs_motor.h
+    Device/rs_motor_instances.c
+    Device/rs_motor_instances.h
     Algorithm/pid.c
     Algorithm/pid.h
     Modules/chassis.c
     Modules/chassis.h
-    Modules/kfs.c
-    Modules/kfs.h
+    Modules/rs_actuator.c
+    Modules/rs_actuator.h
     Modules/lift.c
     Modules/lift.h
     Modules/comm_protocol.c

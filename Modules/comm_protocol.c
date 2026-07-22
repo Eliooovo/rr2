@@ -5,7 +5,7 @@
  * 数据流:
  *   Jetson USB → CDC_Receive_HS → Comm_OnUsbReceived → 环形缓冲区
  *   Comm_ParseRx: 找帧头 0xAA → 收 46 字节 → 验证帧尾 0x55 → 解析 11 个 float
- *   Comm_ApplyCommand: 分发到 Chassis/Lift 控制模块
+ *   Comm_ApplyCommand: 分发到 Chassis/Lift/RS actuator 控制模块
  *   Comm_SendFeedbackPeriodic: 打包 46 字节反馈帧 → CDC_Transmit_HS → Jetson
  */
 
@@ -15,9 +15,9 @@
 
 #include "chassis.h"
 #include "dji_motor.h"
-#include "kfs.h"
 #include "lift.h"
 #include "main.h"
+#include "rs_actuator.h"
 #include "stm32h7xx_hal.h"
 #include "usbd_cdc_if.h"
 
@@ -145,10 +145,10 @@ static void Comm_UnpackCommand(const uint8_t packet[COMM_PACKET_SIZE])
     float *fields[COMM_FLOAT_COUNT] = {
         &s_last_command.vx,             &s_last_command.vy,
         &s_last_command.vw,             &s_last_command.front_lift,
-        &s_last_command.rear_lift,      &s_last_command.kfs_lift,
-        &s_last_command.kfs_root_rotate,&s_last_command.kfs_end_rotate,
-        &s_last_command.kfs_grip,       &s_last_command.tip_rotate,
-        &s_last_command.tip_grip,
+        &s_last_command.rear_lift,      &s_last_command.rs_actuator_0,
+        &s_last_command.rs_actuator_1,  &s_last_command.rs_actuator_2,
+        &s_last_command.rs_actuator_3,  &s_last_command.rs_actuator_4,
+        &s_last_command.rs_actuator_5,
     };
 
     for (uint8_t i = 0U; i < COMM_PACKET_SIZE; ++i) {
@@ -248,10 +248,12 @@ static void Comm_ApplyCommand(void)
         Lift_SetTargetPositionDeg(COMM_LIFT_PAIR_REAR_B,  s_last_command.rear_lift);
     }
 
-    /* KFS 升降: RS00 内部位置 PID，直接下发目标角度。 */
-    Kfs_SetLiftTargetDeg(s_last_command.kfs_lift);
+    /* RS actuator 0: generic RobStride position actuator.
+     * The lower control layer does not care where the motor is mounted. */
+    (void)RsActuator_SetTargetDeg(RS_ACTUATOR_0, s_last_command.rs_actuator_0);
 
-    /* 其他 KFS/端头字段后续按同样方式接入 kfs 模块。 */
+    /* Other RS fields will map to more RsActuatorId entries after their
+     * physical motor IDs are confirmed. */
 }
 
 /* ==========================================================================
@@ -283,25 +285,25 @@ static void Comm_PackFeedback(uint8_t packet[COMM_PACKET_SIZE])
         feedback.rear_lift  = 0.0f;
     }
 
-    /* KFS 升降反馈来自 RS00 多圈位置。 */
-    feedback.kfs_lift        = Kfs_GetLiftPositionDeg();
-    feedback.kfs_root_rotate = 0.0f;
-    feedback.kfs_end_rotate  = 0.0f;
-    feedback.kfs_grip        = 0.0f;
-    feedback.tip_rotate      = 0.0f;
-    feedback.tip_grip        = 0.0f;
+    /* Keep packet layout unchanged. Field 5 currently reports RS actuator 0. */
+    feedback.rs_actuator_0 = RsActuator_GetPositionDeg(RS_ACTUATOR_0);
+    feedback.rs_actuator_1 = 0.0f;
+    feedback.rs_actuator_2 = 0.0f;
+    feedback.rs_actuator_3 = 0.0f;
+    feedback.rs_actuator_4 = 0.0f;
+    feedback.rs_actuator_5 = 0.0f;
 
     fields[0]  = &feedback.vx;
     fields[1]  = &feedback.vy;
     fields[2]  = &feedback.vw;
     fields[3]  = &feedback.front_lift;
     fields[4]  = &feedback.rear_lift;
-    fields[5]  = &feedback.kfs_lift;
-    fields[6]  = &feedback.kfs_root_rotate;
-    fields[7]  = &feedback.kfs_end_rotate;
-    fields[8]  = &feedback.kfs_grip;
-    fields[9]  = &feedback.tip_rotate;
-    fields[10] = &feedback.tip_grip;
+    fields[5]  = &feedback.rs_actuator_0;
+    fields[6]  = &feedback.rs_actuator_1;
+    fields[7]  = &feedback.rs_actuator_2;
+    fields[8]  = &feedback.rs_actuator_3;
+    fields[9]  = &feedback.rs_actuator_4;
+    fields[10] = &feedback.rs_actuator_5;
 
     packet[0] = COMM_FEEDBACK_HEAD;
     for (uint8_t i = 0U; i < COMM_FLOAT_COUNT; ++i) {

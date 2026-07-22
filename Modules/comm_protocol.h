@@ -37,12 +37,12 @@ typedef struct {
     float vw;                 /* 底盘 yaw 角速度 (rpm) */
     float front_lift;         /* 前升降组目标位置 (度) */
     float rear_lift;          /* 后升降组目标位置 (度) */
-    float kfs_lift;           /* KFS 升降目标 (灵足驱动回调前保留) */
-    float kfs_root_rotate;    /* KFS 根部旋转目标 (保留) */
-    float kfs_end_rotate;     /* KFS 末端旋转目标 (保留) */
-    float kfs_grip;           /* KFS 开合目标 (保留) */
-    float tip_rotate;         /* 端头旋转目标 (保留) */
-    float tip_grip;           /* 端头开合目标 (保留) */
+    float rs_actuator_0;      /* RS 位置执行器 0 目标 (度), 当前映射 RS00 ID3 */
+    float rs_actuator_1;      /* RS 位置执行器 1 目标 (度), 预留 */
+    float rs_actuator_2;      /* RS 位置执行器 2 目标 (度), 预留 */
+    float rs_actuator_3;      /* RS 位置执行器 3 目标 (度), 预留 */
+    float rs_actuator_4;      /* RS 位置执行器 4 目标 (度), 预留 */
+    float rs_actuator_5;      /* RS 位置执行器 5 目标 (度), 预留 */
 } CommFrameFloats;
 
 /* ==========================================================================
