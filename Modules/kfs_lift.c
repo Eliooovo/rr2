@@ -239,6 +239,16 @@ void KfsLift_RunPeriodic(kfs_lift_t *lift)
     (void)rs_motor_update(&lift->internal.motor, now_ms);
     KfsLift_UpdateFeedback(lift);
 
+    /* FDCAN 启动后先唤醒电机；未成功发送使能前不得进入位置控制。 */
+    if (lift->state.wake_command_sent == 0U) {
+        motor_status = rs_motor_enable(&lift->internal.motor);
+        if (motor_status != RS_MOTOR_STATUS_OK) {
+            lift->fault.can_tx_error = 1U;
+            return;
+        }
+        lift->state.wake_command_sent = 1U;
+    }
+
     if (lift->internal.motor.state.feedback_count != 0U &&
         lift->internal.motor.state.online == 0U) {
         lift->state.feedback_valid = 0U;

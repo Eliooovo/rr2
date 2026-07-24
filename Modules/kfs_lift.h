@@ -45,6 +45,7 @@ typedef struct {
 
 typedef struct {
     uint8_t initialized;
+    uint8_t wake_command_sent;
     uint8_t zeroed;
     uint8_t ready;
     uint8_t feedback_valid;
@@ -88,7 +89,10 @@ kfs_lift_status_t KfsLift_SetTargetHeightM(kfs_lift_t *lift, float height_m);
 /** 将当前反馈电机位置记录为高度 0.0 m，并使模块进入可运动状态。 */
 kfs_lift_status_t KfsLift_ConfirmZero(kfs_lift_t *lift);
 
-/** 在主循环中周期调用，处理反馈累计、超时保护和待发送的 PP 目标。 */
+/**
+ * 在主循环中周期调用：先发送一次使能唤醒，再处理反馈累计、超时保护和
+ * 待发送的 PP 目标。调用前必须已启动 config.hfdcan 对应的 FDCAN 外设。
+ */
 void KfsLift_RunPeriodic(kfs_lift_t *lift);
 
 /** 停止并失能 RS00 电机。 */

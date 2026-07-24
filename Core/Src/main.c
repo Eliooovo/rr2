@@ -180,9 +180,9 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
     
-    //Comm_RunPeriodic();
-    //Chassis_RunPeriodic();
-    //Lift_RunPeriodic();
+    Comm_RunPeriodic();
+    Chassis_RunPeriodic();
+    Lift_RunPeriodic();
     KfsLift_RunPeriodic(&s_kfs_lift);
 #if KFS_JLINK_TEST_ENABLE
     KfsJlinkTestRun();
