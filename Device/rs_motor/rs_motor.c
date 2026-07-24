@@ -25,6 +25,7 @@
 #define RS_EXT_ID_DATA_SHIFT          8U
 #define RS_EXT_ID_TYPE_MASK           0x1FU
 #define RS_EXT_ID_BYTE_MASK           0xFFU
+#define RS_DEFAULT_PP_POSITION_LIMIT_RAD 12.57f
 
 typedef struct {
     float speed_min;
@@ -138,6 +139,11 @@ static uint8_t rs_motor_config_is_valid(const rs_motor_config_t *config)
         return 0U;
     }
     if (config->offline_timeout_ms == 0U) {
+        return 0U;
+    }
+    if (rs_motor_is_finite(config->pp_position_limit_rad) == 0U ||
+        config->pp_position_limit_rad < 0.0f ||
+        config->pp_position_limit_rad > 100000.0f) {
         return 0U;
     }
     return 1U;
@@ -302,8 +308,17 @@ rs_motor_status_t rs_motor_init(rs_motor_t *motor)
     }
 
     range = &s_ranges[motor->config.motor_type];
-    motor->internal.position_min = -12.57f;
-    motor->internal.position_max = 12.57f;
+    motor->internal.position_min = RS_MOTOR_FEEDBACK_POSITION_MIN_RAD;
+    motor->internal.position_max = RS_MOTOR_FEEDBACK_POSITION_MAX_RAD;
+    motor->internal.feedback_position_min = RS_MOTOR_FEEDBACK_POSITION_MIN_RAD;
+    motor->internal.feedback_position_max = RS_MOTOR_FEEDBACK_POSITION_MAX_RAD;
+    if (motor->config.pp_position_limit_rad > 0.0f) {
+        motor->internal.pp_position_min = -motor->config.pp_position_limit_rad;
+        motor->internal.pp_position_max = motor->config.pp_position_limit_rad;
+    } else {
+        motor->internal.pp_position_min = -RS_DEFAULT_PP_POSITION_LIMIT_RAD;
+        motor->internal.pp_position_max = RS_DEFAULT_PP_POSITION_LIMIT_RAD;
+    }
     motor->internal.speed_min = range->speed_min;
     motor->internal.speed_max = range->speed_max;
     motor->internal.kp_min = range->kp_min;
@@ -441,8 +456,8 @@ rs_motor_status_t rs_motor_pp_position_control(rs_motor_t *motor,
                                  motor->internal.speed_min,
                                  motor->internal.speed_max);
     position_rad = rs_motor_clamp(position_rad,
-                                  motor->internal.position_min,
-                                  motor->internal.position_max);
+                                  motor->internal.pp_position_min,
+                                  motor->internal.pp_position_max);
 
     status = rs_motor_apply_mode(motor, RS_MOTOR_CONTROL_MODE_PP_POSITION);
     if (status != RS_MOTOR_STATUS_OK) {
@@ -606,8 +621,8 @@ uint8_t rs_motor_handle_rx(FDCAN_HandleTypeDef *hfdcan,
     motor->feedback.run_state = (rs_motor_run_state_t)run_state;
 
     motor->feedback.angle_rad = rs_motor_u16_to_float(rs_motor_get_be_u16(&data[0]),
-                                                       motor->internal.position_min,
-                                                       motor->internal.position_max);
+                                                       motor->internal.feedback_position_min,
+                                                       motor->internal.feedback_position_max);
     motor->feedback.speed_rad_s = rs_motor_u16_to_float(rs_motor_get_be_u16(&data[2]),
                                                          motor->internal.speed_min,
                                                          motor->internal.speed_max);

@@ -29,32 +29,22 @@
 #include "chassis.h"
 #include "comm_protocol.h"
 #include "dji_motor.h"
+#include "kfs_lift.h"
 #include "lift.h"
-#include "rs_motor.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-
-typedef enum {
-  RS_MOTOR_TEST_WAIT_START = 0,
-  RS_MOTOR_TEST_RUNNING,
-  RS_MOTOR_TEST_DONE,
-  RS_MOTOR_TEST_ERROR
-} RsMotorTestPhase;
 
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 
-#define RS_MOTOR_TEST_MOTOR_ID          3U
-#define RS_MOTOR_TEST_MASTER_ID         0xFDU
-#define RS_MOTOR_TEST_START_DELAY_MS    1000U
-#define RS_MOTOR_TEST_RUN_TIME_MS       2000U
-#define RS_MOTOR_TEST_CURRENT_LIMIT_A   1.0f
-#define RS_MOTOR_TEST_ACCEL_RAD_S2      2.0f
-#define RS_MOTOR_TEST_SPEED_RAD_S       1.0f
+/* J-Link 固件直测：默认关闭，打开前必须确认机构处于机械下限。 */
+#define KFS_JLINK_TEST_ENABLE             1U
+#define KFS_JLINK_TEST_AUTO_CONFIRM_ZERO  1U
+#define KFS_JLINK_TEST_HEIGHT_M           0.003f
 
 /* USER CODE END PD */
 
@@ -67,19 +57,25 @@ typedef enum {
 
 /* USER CODE BEGIN PV */
 
-static rs_motor_t s_rs_test_motor = {
+static kfs_lift_t s_kfs_lift = {
   .config = {
     .hfdcan = &hfdcan3,
-    .motor_id = RS_MOTOR_TEST_MOTOR_ID,
-    .master_id = RS_MOTOR_TEST_MASTER_ID,
+    .motor_id = 1U,
+    .master_id = 0xFDU,
     .motor_type = RS_MOTOR_TYPE_5,
     .offline_timeout_ms = 100U,
+    .max_height_m = 0.24f,
+    .meters_per_revolution_m = 0.004f,
+    .speed_rad_s = 10.0f,
+    .acceleration_rad_s2 = 10.0f,
+    .direction = 1,
+    .position_command_limit_rad = 1000.0f,
   },
 };
 
-volatile RsMotorTestPhase g_rs_motor_test_phase = RS_MOTOR_TEST_WAIT_START;
-volatile rs_motor_status_t g_rs_motor_test_status = RS_MOTOR_STATUS_NOT_INITIALIZED;
-static uint32_t s_rs_motor_test_phase_start_ms;
+#if KFS_JLINK_TEST_ENABLE
+static uint8_t s_kfs_jlink_test_command_sent;
+#endif
 
 /* USER CODE END PV */
 
@@ -92,61 +88,36 @@ void SystemClock_Config(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
+#if KFS_JLINK_TEST_ENABLE
 /**
- * RobStride 最小上电测试：延时后低速旋转 2 秒，随后零速并失能。
- * 任一启动报文发送失败时立即尝试失能，测试不会自动重试。
+ * J-Link 固件直测：反馈在线后可自动确认零点，并发送固定高度目标，单位 m。
+ * 该测试只发送一次目标，测试结束后应将 KFS_JLINK_TEST_ENABLE 改回 0。
  */
-static void RsMotor_TestRun(void)
+  volatile uint32_t g_kfs_test_entered = 0;  // 全局变量
+static void KfsJlinkTestRun(void)
 {
-  uint32_t now_ms = HAL_GetTick();
+  g_kfs_test_entered++;
+  kfs_lift_status_t status;
 
-  if (g_rs_motor_test_phase == RS_MOTOR_TEST_ERROR ||
-      g_rs_motor_test_phase == RS_MOTOR_TEST_DONE) {
+#if KFS_JLINK_TEST_AUTO_CONFIRM_ZERO
+  if (s_kfs_lift.state.zeroed == 0U &&
+      s_kfs_lift.state.feedback_valid != 0U) {
+    (void)KfsLift_ConfirmZero(&s_kfs_lift);
+  }
+#endif
+
+  if (s_kfs_jlink_test_command_sent != 0U ||
+      KfsLift_IsReady(&s_kfs_lift) == 0U) {
     return;
   }
 
-  (void)rs_motor_update(&s_rs_test_motor, now_ms);
-
-  if (g_rs_motor_test_phase == RS_MOTOR_TEST_WAIT_START) {
-    if ((uint32_t)(now_ms - s_rs_motor_test_phase_start_ms) <
-        RS_MOTOR_TEST_START_DELAY_MS) {
-      return;
-    }
-
-    g_rs_motor_test_status = rs_motor_speed_control(
-        &s_rs_test_motor,
-        RS_MOTOR_TEST_CURRENT_LIMIT_A,
-        RS_MOTOR_TEST_ACCEL_RAD_S2,
-        RS_MOTOR_TEST_SPEED_RAD_S);
-    if (g_rs_motor_test_status != RS_MOTOR_STATUS_OK) {
-      (void)rs_motor_disable(&s_rs_test_motor);
-      g_rs_motor_test_phase = RS_MOTOR_TEST_ERROR;
-      return;
-    }
-
-    s_rs_motor_test_phase_start_ms = now_ms;
-    g_rs_motor_test_phase = RS_MOTOR_TEST_RUNNING;
-    return;
-  }
-
-  if ((uint32_t)(now_ms - s_rs_motor_test_phase_start_ms) >=
-      RS_MOTOR_TEST_RUN_TIME_MS) {
-    rs_motor_status_t stop_status;
-    rs_motor_status_t disable_status;
-
-    stop_status = rs_motor_speed_control(
-        &s_rs_test_motor,
-        RS_MOTOR_TEST_CURRENT_LIMIT_A,
-        RS_MOTOR_TEST_ACCEL_RAD_S2,
-        0.0f);
-    disable_status = rs_motor_disable(&s_rs_test_motor);
-
-    g_rs_motor_test_status = (stop_status != RS_MOTOR_STATUS_OK) ?
-                             stop_status : disable_status;
-    g_rs_motor_test_phase = (g_rs_motor_test_status == RS_MOTOR_STATUS_OK) ?
-                            RS_MOTOR_TEST_DONE : RS_MOTOR_TEST_ERROR;
+  status = KfsLift_SetTargetHeightM(&s_kfs_lift, KFS_JLINK_TEST_HEIGHT_M);
+  s_kfs_jlink_test_command_sent = 1U;
+  if (status != KFS_LIFT_STATUS_OK) {
+    KfsLift_Stop(&s_kfs_lift);
   }
 }
+#endif
 
 /* USER CODE END 0 */
 
@@ -196,13 +167,9 @@ int main(void)
   DjiMotor_Init();
   Chassis_Init();
   Lift_Init();
-  g_rs_motor_test_status = rs_motor_init(&s_rs_test_motor);
-  if (g_rs_motor_test_status != RS_MOTOR_STATUS_OK) {
-    g_rs_motor_test_phase = RS_MOTOR_TEST_ERROR;
-  }
+  (void)KfsLift_Init(&s_kfs_lift);
   bsp_can_init();
-  s_rs_motor_test_phase_start_ms = HAL_GetTick();
-  Comm_Init();
+  Comm_Init(&s_kfs_lift);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -212,10 +179,14 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    Comm_RunPeriodic();
-    Chassis_RunPeriodic();
-    Lift_RunPeriodic();
-    RsMotor_TestRun();
+    
+    //Comm_RunPeriodic();
+    //Chassis_RunPeriodic();
+    //Lift_RunPeriodic();
+    KfsLift_RunPeriodic(&s_kfs_lift);
+#if KFS_JLINK_TEST_ENABLE
+    KfsJlinkTestRun();
+#endif
   }
   /* USER CODE END 3 */
 }

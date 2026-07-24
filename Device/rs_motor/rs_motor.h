@@ -9,6 +9,10 @@ extern "C" {
 
 #include "fdcan.h"
 
+/* RobStride 反馈位置字段的协议解码范围。 */
+#define RS_MOTOR_FEEDBACK_POSITION_MIN_RAD (-12.57f)
+#define RS_MOTOR_FEEDBACK_POSITION_MAX_RAD (12.57f)
+
 /** RobStride 私有协议支持的电机参数表编号。 */
 typedef enum {
     RS_MOTOR_TYPE_0 = 0,
@@ -90,6 +94,7 @@ typedef struct {
     uint8_t master_id;
     rs_motor_type_t motor_type;
     uint32_t offline_timeout_ms;   /**< 必须大于 0。 */
+    float pp_position_limit_rad;    /**< PP 位置目标绝对值上限，0 表示协议默认值。 */
 } rs_motor_config_t;
 
 typedef struct rs_motor rs_motor_t;
@@ -100,6 +105,10 @@ typedef struct rs_motor rs_motor_t;
 typedef struct {
     float position_min;
     float position_max;
+    float pp_position_min;
+    float pp_position_max;
+    float feedback_position_min;
+    float feedback_position_max;
     float speed_min;
     float speed_max;
     float kp_min;

@@ -16,6 +16,7 @@
 #include "chassis.h"
 #include "dji_motor.h"
 #include "lift.h"
+#include "kfs_lift.h"
 #include "main.h"
 #include "stm32h7xx_hal.h"
 #include "usbd_cdc_if.h"
@@ -59,6 +60,7 @@ static uint8_t  s_has_command;                /* 是否收到过命令 (调试�
 static uint8_t  s_new_command_pending;        /* 有新命令待执行 */
 static uint8_t  s_lift_zeroed;                /* 升降是否已设零点 (首次在线时自动触发) */
 static uint32_t s_last_feedback_ms;           /* 上次发送反馈的时间 */
+static kfs_lift_t *s_kfs_lift;                /* KFS 抬升模块对象 */
 
 #if !COMM_USB_TEST_FRAME_ENABLE
 static uint8_t  s_feedback_packet[COMM_PACKET_SIZE];  /* 二进制反馈帧 */
@@ -247,7 +249,15 @@ static void Comm_ApplyCommand(void)
         Lift_SetTargetPositionDeg(COMM_LIFT_PAIR_REAR_B,  s_last_command.rear_lift);
     }
 
-    /* KFS 和端头字段暂存，等灵足/舵机驱动完成后接入 */
+    if (s_kfs_lift != 0) {
+        if (s_last_command.kfs_lift == KFS_LIFT_CONFIRM_ZERO_COMMAND_M) {
+            (void)KfsLift_ConfirmZero(s_kfs_lift);
+        } else if (s_last_command.kfs_lift >= 0.0f) {
+            (void)KfsLift_SetTargetHeightM(s_kfs_lift, s_last_command.kfs_lift);
+        }
+    }
+
+    /* 其他 KFS 和端头字段暂存，等待对应执行器接入。 */
 }
 
 /* ==========================================================================
@@ -279,8 +289,9 @@ static void Comm_PackFeedback(uint8_t packet[COMM_PACKET_SIZE])
         feedback.rear_lift  = 0.0f;
     }
 
-    /* 灵足/端头字段暂为 0 */
-    feedback.kfs_lift        = 0.0f;
+    /* KFS 反馈为相对零点的实际高度，单位 m。 */
+    feedback.kfs_lift        = (s_kfs_lift != 0) ?
+                               KfsLift_GetActualHeightM(s_kfs_lift) : 0.0f;
     feedback.kfs_root_rotate = 0.0f;
     feedback.kfs_end_rotate  = 0.0f;
     feedback.kfs_grip        = 0.0f;
@@ -330,7 +341,7 @@ static void Comm_SendFeedbackPeriodic(void)
  * 公开接口
  * ========================================================================== */
 
-void Comm_Init(void)
+void Comm_Init(kfs_lift_t *kfs_lift)
 {
     s_rx_head        = 0U;
     s_rx_tail        = 0U;
@@ -339,6 +350,7 @@ void Comm_Init(void)
     s_new_command_pending = 0U;
     s_lift_zeroed    = 0U;
     s_last_feedback_ms = 0U;
+    s_kfs_lift = kfs_lift;
     g_comm_rx_valid_frame_count = 0U;
     g_comm_rx_vx = 0.0f;
     g_comm_rx_vy = 0.0f;

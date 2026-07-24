@@ -18,6 +18,8 @@ extern "C" {
 
 #include <stdint.h>
 
+typedef struct kfs_lift kfs_lift_t;
+
 #define COMM_FLOAT_COUNT        11U                         /* 每帧 11 个 float */
 #define COMM_PACKET_SIZE        (1U + COMM_FLOAT_COUNT * 4U + 1U)  /* 1 + 44 + 1 = 46 字节 */
 #define COMM_CMD_HEAD           0xAAU                      /* 命令帧头 */
@@ -37,7 +39,7 @@ typedef struct {
     float vw;                 /* 底盘 yaw 角速度 (rpm) */
     float front_lift;         /* 前升降组目标位置 (度) */
     float rear_lift;          /* 后升降组目标位置 (度) */
-    float kfs_lift;           /* KFS 升降目标 (灵足驱动回调前保留) */
+    float kfs_lift;           /* KFS 目标高度，单位 m；-1.0 m 表示确认零点 */
     float kfs_root_rotate;    /* KFS 根部旋转目标 (保留) */
     float kfs_end_rotate;     /* KFS 末端旋转目标 (保留) */
     float kfs_grip;           /* KFS 开合目标 (保留) */
@@ -49,7 +51,7 @@ typedef struct {
  * 公开接口
  * ========================================================================== */
 
-void Comm_Init(void);                               /* 初始化缓冲区、状态 */
+void Comm_Init(kfs_lift_t *kfs_lift);               /* 初始化缓冲区、状态并绑定 KFS 对象 */
 void Comm_RunPeriodic(void);                        /* main() while(1) 中每圈都调: 解析→执行→反馈 */
 void Comm_OnUsbReceived(const uint8_t *data, uint32_t len);  /* USB CDC 收到数据时回调 */
 

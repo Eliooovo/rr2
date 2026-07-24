@@ -160,3 +160,24 @@ rb = vx + vy - wz*L    // 右后
 
 5. 连 Jetson，上位机发指令控制
 ```
+
+6.上位机发送指令+下位机响应： Comm_RunPeriodic(); 
+                          Chassis_RunPeriodic();开启
+## 选中一个git，右键选择“复制提交哈希”（eg：880985aa00ae9001ce78267b9054acc993f27f89）给ai，ai能查看当时的修改/保存
+
+## 波特率： CAN 通信的物理层约定，就像两个人打电话必须说同一种语言、同一个语速。
+如果双方（我的stm32cubemx配置的和电机）另一个波特率不匹配：
+
+  MCU @ 1Mbps:    |‾|_|‾‾|__|‾|_|‾|_|‾‾|     ← 1 bit = 1μs
+  MCU @ 600kbps:  |‾‾|___|‾‾‾|___|‾‾|___|     ← 1 bit = 1.67μs
+
+## 编译失败：右下角出现 “CMake 可执行文件错误: "cube-cmake"。请检查以确保它已安装，或者 "cmake.cmakePath" 设置的值包含正确的路径”
+ 检查vscode配置是否写死了："cmake.cmakePath": "cube-cmake"
+ VS Code CMake Tools 插件不会去调用系统默认的 cmake，而是专门去找一个叫 cube-cmake 的可执行文件。以前不报错，说明当时你的环境里大概率满足了其中一种情况：
+1、cube-cmake 这个命令以前存在，比如 STM32CubeIDE / STM32 VS Code 插件装过或配置过它。
+2、以前 VS Code 的环境变量里能找到它，但现在终端/VS Code 启动环境变了。
+3、STM32 相关插件、Cube 工具链、路径配置或软链接被更新、卸载、移动了。
+4、你以前不是用这个工作区的 .vscode/settings.json 配置编译，而是用了系统 CMake 或别的 profile。
+5、VS Code/CMake Tools 插件更新后更严格地按 cmake.cmakePath 执行，不再兜底找普通 cmake。
+你的机器现在的实际情况是：/usr/bin/cmake 存在，cube-cmake 不存在。
+   "cmake.cmakePath": "/usr/bin/cmake",  ->正确
