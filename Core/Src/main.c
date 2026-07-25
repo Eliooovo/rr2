@@ -26,42 +26,18 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "bsp_fdcan.h"
-#include "chassis.h"
-#include "comm_protocol.h"
-#include "dji_motor.h"
-#include "lift.h"
-#include "rs_motor.h"
+#include "chassis_app.h"
+#include "comm_app.h"
+#include "lift_app.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
 
-typedef enum {
-  RS_MOTOR_TEST_WAIT_START = 0,
-  RS_MOTOR_TEST_MOVING_UP,
-  RS_MOTOR_TEST_RETURNING_ZERO,
-  RS_MOTOR_TEST_ERROR
-} RsMotorTestPhase;
-
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
-#define RS_MOTOR_TEST_MOTOR_ID                    1U
-#define RS_MOTOR_TEST_MASTER_ID                   0xFDU
-#define RS_MOTOR_TEST_START_DELAY_MS              1000U
-#define RS_MOTOR_TEST_UP_RUN_TIME_MS               30000U
-#define RS_MOTOR_TEST_OFFLINE_TIMEOUT_MS          100U
-#define RS_MOTOR_TEST_CONTROL_PERIOD_MS            10U
-#define RS_MOTOR_TEST_CURRENT_LIMIT_A              2.0f
-#define RS_MOTOR_TEST_POSITION_KP_S_1              3.0f
-#define RS_MOTOR_TEST_POSITION_TOLERANCE_RAD       0.0f
-#define RS_MOTOR_TEST_MAX_SPEED_RAD_S              18.84955592153875943078f
-#define RS_MOTOR_TEST_ACCELERATION_RAD_S2          800.0f
-#define RS_MOTOR_TEST_UP_TARGET_DEG                7200.0
-#define RS_MOTOR_TEST_ZERO_TARGET_DEG              0.0
-#define RS_MOTOR_TEST_DEG_TO_RAD_D                 0.01745329251994329577
 
 /* USER CODE END PD */
 
@@ -74,26 +50,6 @@ typedef enum {
 
 /* USER CODE BEGIN PV */
 
-static rs_motor_t s_rs_test_motor = {
-  .config = {
-    .hfdcan = &hfdcan3,
-    .motor_id = RS_MOTOR_TEST_MOTOR_ID,
-    .master_id = RS_MOTOR_TEST_MASTER_ID,
-    .motor_type = RS_MOTOR_TYPE_0,
-    .offline_timeout_ms = RS_MOTOR_TEST_OFFLINE_TIMEOUT_MS,
-    .multi_turn = {
-      .current_limit_a = RS_MOTOR_TEST_CURRENT_LIMIT_A,
-      .position_kp_s_1 = RS_MOTOR_TEST_POSITION_KP_S_1,
-      .position_tolerance_rad = RS_MOTOR_TEST_POSITION_TOLERANCE_RAD,
-      .control_period_ms = RS_MOTOR_TEST_CONTROL_PERIOD_MS,
-    },
-  },
-};
-
-volatile RsMotorTestPhase g_rs_motor_test_phase = RS_MOTOR_TEST_WAIT_START;
-volatile rs_motor_status_t g_rs_motor_test_status = RS_MOTOR_STATUS_NOT_INITIALIZED;
-static uint32_t s_rs_motor_test_phase_start_ms;
-
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -104,68 +60,6 @@ void SystemClock_Config(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-
-/**
- * RobStride 连续多圈位置测试：先向上转到 +7200°，从首条控制命令发送成功
- * 开始计时 30 秒，再发送软件零点 0° 目标并永久运行外环保持控制。
- */
-static void RsMotor_TestRun(void)
-{
-  uint32_t now_ms = HAL_GetTick();
-
-  if (g_rs_motor_test_phase == RS_MOTOR_TEST_ERROR) {
-    return;
-  }
-
-  g_rs_motor_test_status = rs_motor_update(&s_rs_test_motor, now_ms);
-  if (g_rs_motor_test_status != RS_MOTOR_STATUS_OK) {
-    (void)rs_motor_disable(&s_rs_test_motor);
-    g_rs_motor_test_phase = RS_MOTOR_TEST_ERROR;
-    return;
-  }
-
-  if (g_rs_motor_test_phase == RS_MOTOR_TEST_WAIT_START) {
-    if ((uint32_t)(now_ms - s_rs_motor_test_phase_start_ms) <
-        RS_MOTOR_TEST_START_DELAY_MS) {
-      return;
-    }
-
-    g_rs_motor_test_status = rs_motor_multi_turn_position_control(
-        &s_rs_test_motor,
-        RS_MOTOR_TEST_MAX_SPEED_RAD_S,
-        RS_MOTOR_TEST_ACCELERATION_RAD_S2,
-        RS_MOTOR_TEST_UP_TARGET_DEG * RS_MOTOR_TEST_DEG_TO_RAD_D);
-    if (g_rs_motor_test_status != RS_MOTOR_STATUS_OK) {
-      (void)rs_motor_disable(&s_rs_test_motor);
-      g_rs_motor_test_phase = RS_MOTOR_TEST_ERROR;
-      return;
-    }
-
-    s_rs_motor_test_phase_start_ms = now_ms;
-    g_rs_motor_test_phase = RS_MOTOR_TEST_MOVING_UP;
-    return;
-  }
-
-  if (g_rs_motor_test_phase == RS_MOTOR_TEST_MOVING_UP) {
-    if ((uint32_t)(now_ms - s_rs_motor_test_phase_start_ms) <
-        RS_MOTOR_TEST_UP_RUN_TIME_MS) {
-      return;
-    }
-
-    g_rs_motor_test_status = rs_motor_multi_turn_position_control(
-        &s_rs_test_motor,
-        RS_MOTOR_TEST_MAX_SPEED_RAD_S,
-        RS_MOTOR_TEST_ACCELERATION_RAD_S2,
-        RS_MOTOR_TEST_ZERO_TARGET_DEG * RS_MOTOR_TEST_DEG_TO_RAD_D);
-    if (g_rs_motor_test_status != RS_MOTOR_STATUS_OK) {
-      (void)rs_motor_disable(&s_rs_test_motor);
-      g_rs_motor_test_phase = RS_MOTOR_TEST_ERROR;
-      return;
-    }
-
-    g_rs_motor_test_phase = RS_MOTOR_TEST_RETURNING_ZERO;
-  }
-}
 
 /* USER CODE END 0 */
 
@@ -212,16 +106,10 @@ int main(void)
   MX_USART1_UART_Init();
   MX_USB_DEVICE_Init();
   /* USER CODE BEGIN 2 */
-  DjiMotor_Init();
-  Chassis_Init();
-  Lift_Init();
-  g_rs_motor_test_status = rs_motor_init(&s_rs_test_motor);
-  if (g_rs_motor_test_status != RS_MOTOR_STATUS_OK) {
-    g_rs_motor_test_phase = RS_MOTOR_TEST_ERROR;
-  }
+  ChassisApp_Init();
+  LiftApp_Init();
   bsp_can_init();
-  s_rs_motor_test_phase_start_ms = HAL_GetTick();
-  Comm_Init();
+  CommApp_Init();
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -231,10 +119,9 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    Comm_RunPeriodic();
-    Chassis_RunPeriodic();
-    // Lift_RunPeriodic();
-    // RsMotor_TestRun();
+    CommApp_RunPeriodic();
+    ChassisApp_RunPeriodic();
+    LiftApp_RunPeriodic();
   }
   /* USER CODE END 3 */
 }

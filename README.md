@@ -1,162 +1,180 @@
 # rr2
 
-DM-MC02-H7 / STM32H723VGT6 firmware scaffold for the new R2 controller.
+DM-MC02-H7 / STM32H723VGT6 firmware for the R2 controller.
 
-## CubeMX configuration
+## Hardware configuration
 
-- MCU: `STM32H723VGTx` (`STM32H723VGT6`, LQFP100)
+- MCU: `STM32H723VGT6`
 - Clock: 24 MHz HSE, SYSCLK 480 MHz
-- Debug: SWD on `PA13/PA14`
-- FDCAN1: `PD0` RX, `PD1` TX, classic CAN, 1 Mbps
-- FDCAN2: `PB5` RX, `PB6` TX, classic CAN, 1 Mbps
-- FDCAN3: `PD12` RX, `PD13` TX, classic CAN, 1 Mbps
-- USART1: `PA9` TX, `PA10` RX, 921600 8N1
-- Toolchain: CMake + GNU Arm Embedded
+- FDCAN1: chassis, 4 x DJI M3508/C620, classic CAN 1 Mbps
+- FDCAN2: lift, 4 x DJI M3508/C620, classic CAN 1 Mbps
+- FDCAN3: RobStride gripper/end-effector motors, classic CAN 1 Mbps
+- USB HS CDC: upper-computer command and feedback link
+- USART1: 921600 8N1, initialized by CubeMX but not used by `CommApp`
 
-## Bus assignment
+Hardware/peripheral settings are owned by `rr2.ioc`. No CubeMX peripheral
+configuration is duplicated in the Apps.
 
-- `FDCAN1`: chassis, 4 x DJI 3508 mecanum wheel motors
-- `FDCAN2`: lift, 4 x DJI 3508 lift motors
-- `FDCAN3`: gripper / small weapon
-  - Lingzu RS00 gripper lift
-  - Lingzu RS00 gripper rotate
-  - Lingzu RS05 gripper open/close
-  - Lingzu RS05 end-effector rotate
-- `USART1`: upper computer communication
-- Servo: end-effector clamp servo still needs a PWM timer/pin decision before CubeMX can configure it.
+## App architecture
+
+The chassis, lift, and communication functions are three independent Apps:
+
+- `App/chassis_app.*`: owns the FDCAN1 DJI motors/groups, mecanum kinematics,
+  speed control, and actual chassis-velocity feedback.
+- `App/lift_app.*`: owns the FDCAN2 DJI motors/groups, continuous multi-turn
+  position control, and actual position feedback.
+- `App/comm_app.*`: owns USB CDC frame parsing/sending and the two global
+  mailboxes.
+
+`g_comm_app_command` is written only by `CommApp` and read by the other Apps.
+`g_comm_app_feedback` is written by `ChassisApp`/`LiftApp` and read by
+`CommApp`; communication code no longer calls chassis or lift control APIs.
+
+Minimal integration:
+
+```c
+ChassisApp_Init();
+LiftApp_Init();
+bsp_can_init();       /* Start CAN only after all DJI groups are registered. */
+CommApp_Init();
+
+while (1) {
+    CommApp_RunPeriodic();
+    ChassisApp_RunPeriodic();
+    LiftApp_RunPeriodic();
+}
+```
+
+The USB CDC generated file still includes `Modules/comm_protocol.h`. That file
+is now only a compatibility forwarder from `Comm_OnUsbReceived()` to
+`CommApp_OnUsbReceived()`; no generated USB file needs to be edited.
+
+## Command and feedback protocol
+
+Each frame is fixed at 46 bytes:
+
+```text
+0xAA + 11 x IEEE-754 float32 little-endian + 0x55
+```
+
+Field order:
+
+1. chassis `vx` in m/s
+2. chassis `vy` in m/s
+3. chassis `wz` in rad/s
+4. front lift linear position in m
+5. rear lift linear position in m
+6. through 11. reserved
+
+The feedback frame uses the same order. Chassis fields are calculated from all
+four actual motor speeds; lift fields are the actual average continuous
+positions of the front and rear motor pairs. If a subsystem is not ready or
+has an offline motor, that subsystem's feedback fields are sent as zero.
+
+The latest valid command is retained indefinitely; there is currently no
+command timeout. A lift command received before a motor becomes online is
+retained. Each motor starts controlling independently after its own first
+feedback establishes that motor's software zero.
+
+## Chassis configuration
+
+User-adjustable chassis settings are in `App/chassis_app.h`:
+
+- `CHASSIS_APP_MOTOR_CONFIG_INIT`: motor ID, installation direction, and
+  per-motor speed PID.
+- `CHASSIS_APP_VX_DIRECTION` / `CHASSIS_APP_VY_DIRECTION`: upper-computer
+  coordinate reversal, each set to `1.0f` or `-1.0f`.
+- `CHASSIS_APP_VX_SCALE` / `VY_SCALE` / `WZ_SCALE`: execution multipliers.
+- Wheel dimensions, chassis dimensions, reduction ratio, current limit,
+  offline timeout, and control period.
+
+The logical wheel order is `RF, LF, LB, RB`. The current vehicle is numbered
+clockwise from the left-front wheel as IDs `1, 2, 3, 4`, so the table maps
+`RF=2, LF=1, LB=4, RB=3`.
+
+The inverse kinematics are:
+
+```text
+RF = vx - vy - R*wz
+LF = vx + vy + R*wz
+LB = vx - vy + R*wz
+RB = vx + vy - R*wz
+R  = chassis_half_length + chassis_half_width
+```
+
+Actual feedback uses the exact inverse matrix and reverses each motor's
+installation direction before calculation. Coordinate direction is converted
+back to the upper-computer convention. Scale is not divided out, so feedback
+reports actual executed speed.
+
+## Lift configuration
+
+User-adjustable lift settings are in `App/lift_app.h`:
+
+- `LIFT_APP_MOTOR_CONFIG_INIT`: motor ID, per-motor direction (`1` normal,
+  `-1` reversed), position/speed PID, maximum speed, and current limit.
+- Control period, offline timeout, and PID integral limits.
+
+Motors 1/2 receive the front target and are not reversed; motors 3/4 receive
+the rear target and are currently reversed.
+There is no App-level all-online or pair-online gate. An offline motor is
+independently forced to zero current by `dji_motor`, while other online motors
+continue controlling. `LIFT_APP_METERS_PER_OUTPUT_RAD` defines the output-side
+mechanical conversion as `0.01242 m/rad`, and
+`LIFT_APP_MOTOR_REDUCTION_RATIO` is `19.0`. Therefore one motor-shaft radian
+corresponds to `0.01242 / 19 m`. Commands and feedback are converted internally
+with `double`; the USB protocol remains `float32`.
+
+## DJI motor objects and groups
+
+Each C620 is represented by one caller-allocated `dji_motor_t`. A
+caller-allocated `dji_motor_group_t` contains at most four motors sharing one
+CAN command frame:
+
+- command ID `0x200`: motor IDs 1 through 4
+- command ID `0x1FF`: motor IDs 5 through 8
+
+Unused current slots are automatically sent as zero. FDCAN receive callbacks
+are centralized in the BSP and dispatch feedback to registered groups.
+
+```c
+static dji_motor_t motor = {
+    .config = {
+        .motor_id = 1U,
+        .offline_timeout_ms = 100U,
+        .control_period_ms = 1U,
+        .current_limit = 5000.0f,
+        .max_speed_rpm = 300.0f,
+        .speed_pid = {6.0f, 0.5f, 0.0f, 30000.0f},
+        .position_pid = {6.5f, 0.0f, 0.0f, 0.0f},
+    },
+};
+static dji_motor_group_t group = {
+    .config = {
+        .hfdcan = &hfdcan2,
+        .command_id = DJI_MOTOR_CMD_ID_1_TO_4,
+        .motor_count = 1U,
+        .motors = {&motor},
+    },
+};
+
+(void)dji_motor_init(&motor);
+(void)dji_motor_group_init(&group);
+(void)dji_motor_position_control(&motor, 7200.0);
+(void)dji_motor_group_update(&group, HAL_GetTick());
+```
+
+Use `dji_motor_get_feedback()` for an interrupt-safe snapshot of the actual
+single-turn fields and continuous multi-turn position.
 
 ## Build
 
 ```sh
 cmake --preset Debug
 cmake --build --preset Debug
+cmake --preset Release
+cmake --build --preset Release
 ```
 
-Open `rr2.ioc` in STM32CubeMX to adjust pins/peripherals, then regenerate with `generate.mxscript` if needed.
-
-## 电机Can ID修改
-
-现在代码不再假设底盘四个电机一定是 1,2,3,4。比如换车后四个底盘电机 ID 是 4,1,3,2，你只需要改 Modules/chassis.h:36：
-
-  #define CHASSIS_MOTOR_CONFIG_INIT                       \
-      {                                                   \
-          {1U,  1, 6.0f, 1.0f, 0.0f}, /* RF 右前 */      \
-          {4U, -1, 6.0f, 1.0f, 0.0f}, /* LF 左前 */      \
-          {3U, -1, 6.0f, 1.0f, 0.0f}, /* LB 左后 */      \
-          {2U,  1, 6.0f, 1.0f, 0.0f}, /* RB 右后 */      \
-      }
-
-  代码会根据 ID 自动决定发哪一帧：
-
-  ID 1~4 -> 发 0x200
-  ID 5~8 -> 发 0x1FF
-
-  所以如果以后底盘 ID 不是 1,2,3,4，比如 5,6,7,8，也可以适应。只要还是 DJI C620 的 ID 范围 1~8，并且还在同一条 CAN 上，就不用改底盘控制逻辑，
-  只改配置表。
-
-  不能适应的情况是：
-
-  1. 电机不是 C620 / DJI 3508 协议
-  2. 电机 ID 超过 1~8
-  3. 四个底盘电机不在 FDCAN1，而换到了 FDCAN2/FDCAN3
-  4. 四个轮子数量或底盘类型变了，比如不是四麦轮
-
-  这些情况才需要改底层发送或底盘运动学。
-
-  ## 转动角度： float Lift_GetPositionDeg（） #lift.c
-      g_dji_motors[i].total_angle_deg - s_zero_offset_deg[i]
-       (电机原始累积角度，绝对累计值)         （i号lift电机启动测试时记录的零点）
-
-  ## 反馈帧：
-  front_lift/rear_lift :真实角度（Lift_GetPositionDeg（））读的是电机实际位置：g_dji_motors[i].total_angle_deg，只要电机在线就有值
-
-  ## 传位置：#define LIFT_BOOT_TEST_DEG           3600.0f
-  aa 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 55
-  aa 00 00 00 00 00 00 00 00 00 00 00 00 00 00 61 45 00 00 61 45 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 55
-
-## 模块开关与调试指南
-
-### 上电自测 (不用上位机，上电自动跑)
-
-| 文件 | 宏 | 作用 |
-|------|-----|------|
-| `Modules/chassis.h` | `CHASSIS_BOOT_TEST_ENABLE` | `1` = 上电底盘自转 1 秒后停止 |
-| `Modules/chassis.h` | `CHASSIS_BOOT_TEST_VX/VY/WZ` | 分别设为 `1.0f` 测前进/横移/旋转 (保持 0 或 1) |
-| `Modules/lift.h` | `LIFT_BOOT_TEST_ENABLE` | `1` = 上电后升降电机等在线→设零→转到 LIFT_BOOT_TEST_DEG 度 |
-| `Modules/lift.h` | `LIFT_BOOT_TEST_DEG` | 目标角度 (度)，如 `180.0f` |
-
-### 全局限速 (测试 + 上位机指令都生效)
-
-| 文件 | 宏 | 作用 |
-|------|-----|------|
-| `Modules/chassis.h` | `CHASSIS_VX_SCALE` | 前后方向限速系数 (0.0~1.0) |
-| `Modules/chassis.h` | `CHASSIS_VY_SCALE` | 左右方向限速系数 |
-| `Modules/chassis.h` | `CHASSIS_VW_SCALE` | 旋转方向限速系数 |
-
-> 电机实际速度 = 上位机/BOOT_TEST 值 × SCALE。调试时先设小值 (如 0.2)，确认方向正确后再加大。
-
-### 底盘 PID 参数
-
-| 文件 | 位置 | 说明 |
-|------|------|------|
-| `Modules/chassis.h` | `CHASSIS_MOTOR_CONFIG_INIT` | 每个电机的 `speed_kp/ki/kd`，四个值独立可调 |
-| `Modules/chassis.h` | `CHASSIS_CURRENT_LIMIT` | PID 输出电流限幅 (C620 最大 16384) |
-
-### 底盘电机方向
-
-| 文件 | 位置 | 说明 |
-|------|------|------|
-| `Modules/chassis.h` | `direction` 字段 | 试车时若某轮反转，改对应值为 `-1` |
-
-### 升降 PID 参数
-
-| 文件 | 位置 | 说明 |
-|------|------|------|
-| `Modules/lift.h` | `LIFT_MOTOR_CONFIG_INIT` | 每电机的 `position_kp/ki/kd` (位置环) + `speed_kp/ki/kd` (速度环) |
-| `Modules/lift.h` | `max_speed_rpm` | 位置环输出限幅，即最大运动速度 |
-| `Modules/lift.h` | `current_limit` | 速度环输出限幅 (C620 最大 16384) |
-
-### 串口通讯切换
-
-| 文件 | 宏 | 作用 |
-|------|-----|------|
-| `Modules/comm_protocol.h:` | `COMM_USB_TEST_FRAME_ENABLE` | `1` = 每秒发固定 46 字节测试帧验证 USB CDC 链路；`0` = 发真实反馈帧 (20ms 周期) |
-
-> 切到真实反馈帧 (`COMM_USB_TEST_FRAME_ENABLE = 0`) 且把上电自测全关 (`BOOT_TEST_ENABLE = 0`) 后，底盘和升降会完全听从 Jetson 上位机通过 USB 虚拟串口发来的指令。
->
-> 帧格式: `0xAA` + 11 个 float (小端序) + `0x55`，共 46 字节。字段顺序见 `Modules/comm_protocol.h` 的 `CommFrameFloats`。
-
-### 升降电机 Can ID
-
-| 文件 | 位置 | 说明 |
-|------|------|------|
-| `Modules/lift.h` | `LIFT_MOTOR_CONFIG_INIT` 的 `motor_id` 字段 | 当前设为 `{1U, 2U, 3U, 4U}`，换 ID 改这里 |
-
-### 底盘麦轮公式
-
-文件 `Modules/chassis.c` (`Chassis_SetVelocity`) 和 `:204-207` (`Chassis_SetVelocityRpm`):
-
-```c
-// 标准麦轮解算 (DJI 滚子布局)，不要随意改符号
-rf = vx - vy - wz*L    // 右前
-lf = vx + vy + wz*L    // 左前
-lb = vx - vy + wz*L    // 左后
-rb = vx + vy - wz*L    // 右后
-```
-
-### 典型调试流程
-
-```
-1. CHASSIS_BOOT_TEST_ENABLE = 1, BOOT_TEST_VX=1, VY=0, WZ=0 → 确认前进方向
-   → 某轮反转? 改 direction = -1
-
-2. CHASSIS_BOOT_TEST_ENABLE = 1, VX=0, VY=1, WZ=0 → 确认横移方向
-   → 四个轮子各自转动方向正确但车体横移方向反了?
-   → 交换 VX_SCALE/VY_SCALE 的符号 (改 -0.4)
-
-3. CHASSIS_BOOT_TEST_ENABLE = 1, VX=0, VY=0, WZ=1 → 确认旋转方向
-
-4. 确认无误 → BOOT_TEST_ENABLE 全关 → COMM_USB_TEST_FRAME_ENABLE = 0
-
-5. 连 Jetson，上位机发指令控制
-```
+Open `rr2.ioc` in STM32CubeMX 6.17.0 when hardware configuration changes, then
+regenerate using the configured STM32Cube H7 V1.11.2 package.

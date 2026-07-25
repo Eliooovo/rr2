@@ -16,17 +16,18 @@ message("Build type: " ${CMAKE_BUILD_TYPE})
 
 enable_language(C ASM)
 add_executable(${CMAKE_PROJECT_NAME}
+    App/chassis_app.c
+    App/chassis_app.h
+    App/comm_app.c
+    App/comm_app.h
+    App/lift_app.c
+    App/lift_app.h
     Device/dji_motor.c
     Device/dji_motor.h
+    Device/dji_motor_group.c
+    Device/dji_motor_group.h
     Device/rs_motor/rs_motor.c
     Device/rs_motor/rs_motor.h
-    Algorithm/pid.c
-    Algorithm/pid.h
-    Modules/chassis.c
-    Modules/chassis.h
-    Modules/lift.c
-    Modules/lift.h
-    Modules/comm_protocol.c
     Modules/comm_protocol.h)
 
 add_subdirectory(cmake/stm32cubemx)
@@ -40,10 +41,10 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
 
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Inc
+    App
     Bsp
     Device
     Device/rs_motor
-    Algorithm
     Modules
 )
 
