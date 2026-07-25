@@ -73,6 +73,8 @@ typedef struct {
     float target_speed_rpm;
     double target_position_deg;
     double position_error_deg;
+    float speed_correction_rpm; /**< 位置模式的速度输出修正，单位 rpm。 */
+    float current_correction;   /**< 速度/位置模式的 C620 电流命令修正值。 */
 } dji_motor_state_t;
 
 typedef struct dji_motor_group dji_motor_group_t;
@@ -104,6 +106,18 @@ dji_motor_status_t dji_motor_init(dji_motor_t *motor);
 dji_motor_status_t dji_motor_deinit(dji_motor_t *motor);
 
 dji_motor_status_t dji_motor_disable(dji_motor_t *motor);
+/**
+ * 设置位置环输出的运行时速度修正。可在每个控制周期调用，不复位 PID。
+ */
+dji_motor_status_t dji_motor_set_speed_correction(
+    dji_motor_t *motor,
+    float speed_correction_rpm);
+/**
+ * 设置速度环输出的运行时电流修正。可在每个控制周期调用，不复位 PID。
+ */
+dji_motor_status_t dji_motor_set_current_correction(
+    dji_motor_t *motor,
+    float current_correction);
 dji_motor_status_t dji_motor_current_control(dji_motor_t *motor,
                                              float current);
 dji_motor_status_t dji_motor_speed_control(dji_motor_t *motor,

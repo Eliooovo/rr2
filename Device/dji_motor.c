@@ -99,12 +99,10 @@ static double dji_motor_pid_update(
     const dji_motor_pid_config_t *config,
     dji_motor_pid_state_t *state,
     double error,
-    double dt_s,
-    double output_limit)
+    double dt_s)
 {
     double integral_limit = (double)config->integral_limit;
     double derivative;
-    double output;
 
     state->integral += error * dt_s;
     state->integral = dji_motor_clamp_double(state->integral,
@@ -113,10 +111,9 @@ static double dji_motor_pid_update(
     derivative = (error - state->last_error) / dt_s;
     state->last_error = error;
 
-    output = (double)config->kp * error +
-             (double)config->ki * state->integral +
-             (double)config->kd * derivative;
-    return dji_motor_clamp_double(output, -output_limit, output_limit);
+    return (double)config->kp * error +
+           (double)config->ki * state->integral +
+           (double)config->kd * derivative;
 }
 
 static int16_t dji_motor_float_to_current(float current, float limit)
@@ -142,8 +139,7 @@ static float dji_motor_run_speed_pid(dji_motor_t *motor,
     return (float)dji_motor_pid_update(&motor->config.speed_pid,
                                        &motor->internal.speed_pid,
                                        speed_error,
-                                       dt_s,
-                                       (double)motor->config.current_limit);
+                                       dt_s);
 }
 
 dji_motor_status_t dji_motor_init(dji_motor_t *motor)
@@ -193,9 +189,45 @@ dji_motor_status_t dji_motor_disable(dji_motor_t *motor)
     motor->state.enabled = 0U;
     motor->state.control_mode = DJI_MOTOR_CONTROL_MODE_NONE;
     motor->state.target_current = 0.0f;
+    motor->state.speed_correction_rpm = 0.0f;
+    motor->state.current_correction = 0.0f;
     motor->internal.current_command = 0;
     motor->internal.control_timer_started = 0U;
     dji_motor_reset_all_pid(motor);
+    return DJI_MOTOR_STATUS_OK;
+}
+
+dji_motor_status_t dji_motor_set_speed_correction(
+    dji_motor_t *motor,
+    float speed_correction_rpm)
+{
+    dji_motor_status_t status = dji_motor_require_initialized(motor);
+
+    if (status != DJI_MOTOR_STATUS_OK) {
+        return status;
+    }
+    if (dji_motor_is_finite_float(speed_correction_rpm) == 0U) {
+        return DJI_MOTOR_STATUS_INVALID_ARGUMENT;
+    }
+
+    motor->state.speed_correction_rpm = speed_correction_rpm;
+    return DJI_MOTOR_STATUS_OK;
+}
+
+dji_motor_status_t dji_motor_set_current_correction(
+    dji_motor_t *motor,
+    float current_correction)
+{
+    dji_motor_status_t status = dji_motor_require_initialized(motor);
+
+    if (status != DJI_MOTOR_STATUS_OK) {
+        return status;
+    }
+    if (dji_motor_is_finite_float(current_correction) == 0U) {
+        return DJI_MOTOR_STATUS_INVALID_ARGUMENT;
+    }
+
+    motor->state.current_correction = current_correction;
     return DJI_MOTOR_STATUS_OK;
 }
 
@@ -363,7 +395,8 @@ dji_motor_status_t dji_motor_update(dji_motor_t *motor, uint32_t now_ms)
         current = dji_motor_run_speed_pid(motor,
                                           motor->state.target_speed_rpm,
                                           feedback.speed_rpm,
-                                          dt_s);
+                                          dt_s) +
+                  motor->state.current_correction;
     } else if (motor->state.control_mode == DJI_MOTOR_CONTROL_MODE_POSITION) {
         double target_speed_rpm;
 
@@ -378,13 +411,18 @@ dji_motor_status_t dji_motor_update(dji_motor_t *motor, uint32_t now_ms)
             &motor->config.position_pid,
             &motor->internal.position_pid,
             motor->state.position_error_deg,
-            dt_s,
+            dt_s);
+        target_speed_rpm += (double)motor->state.speed_correction_rpm;
+        target_speed_rpm = dji_motor_clamp_double(
+            target_speed_rpm,
+            -(double)motor->config.max_speed_rpm,
             (double)motor->config.max_speed_rpm);
         motor->state.target_speed_rpm = (float)target_speed_rpm;
         current = dji_motor_run_speed_pid(motor,
                                           motor->state.target_speed_rpm,
                                           feedback.speed_rpm,
-                                          dt_s);
+                                          dt_s) +
+                  motor->state.current_correction;
     }
 
     motor->internal.current_command =
