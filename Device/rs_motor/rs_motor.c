@@ -56,6 +56,11 @@ static uint8_t rs_motor_is_finite(float value)
     return (value >= -FLT_MAX && value <= FLT_MAX) ? 1U : 0U;
 }
 
+static uint8_t rs_motor_is_finite_double(double value)
+{
+    return (value >= -DBL_MAX && value <= DBL_MAX) ? 1U : 0U;
+}
+
 static float rs_motor_clamp(float value, float minimum, float maximum)
 {
     if (value > maximum) {
@@ -138,6 +143,25 @@ static uint8_t rs_motor_config_is_valid(const rs_motor_config_t *config)
         return 0U;
     }
     if (config->offline_timeout_ms == 0U) {
+        return 0U;
+    }
+    return 1U;
+}
+
+static uint8_t rs_motor_multi_turn_config_is_valid(const rs_motor_config_t *config)
+{
+    const rs_motor_multi_turn_config_t *multi_turn = &config->multi_turn;
+
+    if (rs_motor_is_finite(multi_turn->current_limit_a) == 0U ||
+        multi_turn->current_limit_a <= 0.0f ||
+        rs_motor_is_finite(multi_turn->position_kp_s_1) == 0U ||
+        multi_turn->position_kp_s_1 <= 0.0f ||
+        rs_motor_is_finite(multi_turn->position_tolerance_rad) == 0U ||
+        multi_turn->position_tolerance_rad < 0.0f) {
+        return 0U;
+    }
+    if (multi_turn->control_period_ms == 0U ||
+        multi_turn->control_period_ms >= config->offline_timeout_ms) {
         return 0U;
     }
     return 1U;
@@ -264,6 +288,62 @@ static rs_motor_status_t rs_motor_apply_mode(rs_motor_t *motor,
         }
         motor->state.enabled = 1U;
     }
+    motor->state.control_mode = mode;
+    return RS_MOTOR_STATUS_OK;
+}
+
+static void rs_motor_cancel_multi_turn(rs_motor_t *motor)
+{
+    memset(&motor->state.multi_turn, 0, sizeof(motor->state.multi_turn));
+    motor->internal.multi_turn_speed_limit_rad_s = 0.0f;
+    motor->internal.multi_turn_last_control_ms = 0U;
+    motor->internal.multi_turn_control_timer_started = 0U;
+}
+
+static rs_motor_status_t rs_motor_configure_multi_turn_speed_mode(
+    rs_motor_t *motor,
+    float acceleration_rad_s2)
+{
+    rs_motor_status_t status;
+
+    if (motor->state.enabled != 0U) {
+        status = rs_motor_send_disable(motor);
+        if (status != RS_MOTOR_STATUS_OK) {
+            return status;
+        }
+        motor->state.enabled = 0U;
+    }
+
+    status = rs_motor_write_mode(motor, RS_MOTOR_CONTROL_MODE_SPEED);
+    if (status != RS_MOTOR_STATUS_OK) {
+        return status;
+    }
+    motor->internal.applied_control_mode = RS_MOTOR_CONTROL_MODE_SPEED;
+    motor->internal.mode_applied = 1U;
+    motor->state.control_mode = RS_MOTOR_CONTROL_MODE_SPEED;
+
+    status = rs_motor_write_float(motor,
+                                  RS_PARAM_CURRENT_LIMIT,
+                                  motor->config.multi_turn.current_limit_a);
+    if (status != RS_MOTOR_STATUS_OK) {
+        return status;
+    }
+    status = rs_motor_write_float(motor,
+                                  RS_PARAM_SPEED_ACCELERATION,
+                                  acceleration_rad_s2);
+    if (status != RS_MOTOR_STATUS_OK) {
+        return status;
+    }
+    status = rs_motor_write_float(motor, RS_PARAM_SPEED_TARGET, 0.0f);
+    if (status != RS_MOTOR_STATUS_OK) {
+        return status;
+    }
+
+    status = rs_motor_send_enable(motor);
+    if (status != RS_MOTOR_STATUS_OK) {
+        return status;
+    }
+    motor->state.enabled = 1U;
     return RS_MOTOR_STATUS_OK;
 }
 
@@ -322,6 +402,7 @@ rs_motor_status_t rs_motor_init(rs_motor_t *motor)
 rs_motor_status_t rs_motor_deinit(rs_motor_t *motor)
 {
     rs_motor_t **link;
+    rs_motor_status_t status;
 
     if (motor == NULL) {
         return RS_MOTOR_STATUS_INVALID_ARGUMENT;
@@ -333,6 +414,15 @@ rs_motor_status_t rs_motor_deinit(rs_motor_t *motor)
     }
     if (*link == NULL || motor->internal.initialized == 0U) {
         return RS_MOTOR_STATUS_NOT_INITIALIZED;
+    }
+
+    if (motor->state.multi_turn.active != 0U) {
+        status = rs_motor_send_disable(motor);
+        if (status != RS_MOTOR_STATUS_OK) {
+            return status;
+        }
+        motor->state.enabled = 0U;
+        rs_motor_cancel_multi_turn(motor);
     }
 
     *link = motor->internal.next;
@@ -368,6 +458,7 @@ rs_motor_status_t rs_motor_disable(rs_motor_t *motor)
     status = rs_motor_send_disable(motor);
     if (status == RS_MOTOR_STATUS_OK) {
         motor->state.enabled = 0U;
+        rs_motor_cancel_multi_turn(motor);
     }
     return status;
 }
@@ -416,8 +507,12 @@ rs_motor_status_t rs_motor_motion_control(rs_motor_t *motor,
 
     status = rs_motor_apply_mode(motor, RS_MOTOR_CONTROL_MODE_MOTION);
     if (status != RS_MOTOR_STATUS_OK) {
+        if (motor->state.enabled == 0U) {
+            rs_motor_cancel_multi_turn(motor);
+        }
         return status;
     }
+    rs_motor_cancel_multi_turn(motor);
     return rs_motor_send(motor, RS_COMM_TYPE_MOTION_CONTROL, torque_raw, data);
 }
 
@@ -446,8 +541,12 @@ rs_motor_status_t rs_motor_pp_position_control(rs_motor_t *motor,
 
     status = rs_motor_apply_mode(motor, RS_MOTOR_CONTROL_MODE_PP_POSITION);
     if (status != RS_MOTOR_STATUS_OK) {
+        if (motor->state.enabled == 0U) {
+            rs_motor_cancel_multi_turn(motor);
+        }
         return status;
     }
+    rs_motor_cancel_multi_turn(motor);
     status = rs_motor_write_float(motor, RS_PARAM_PP_SPEED, speed_rad_s);
     if (status != RS_MOTOR_STATUS_OK) {
         return status;
@@ -482,8 +581,12 @@ rs_motor_status_t rs_motor_csp_position_control(rs_motor_t *motor,
 
     status = rs_motor_apply_mode(motor, RS_MOTOR_CONTROL_MODE_CSP_POSITION);
     if (status != RS_MOTOR_STATUS_OK) {
+        if (motor->state.enabled == 0U) {
+            rs_motor_cancel_multi_turn(motor);
+        }
         return status;
     }
+    rs_motor_cancel_multi_turn(motor);
     status = rs_motor_write_float(motor, RS_PARAM_CSP_SPEED_LIMIT, speed_limit_rad_s);
     if (status != RS_MOTOR_STATUS_OK) {
         return status;
@@ -513,17 +616,34 @@ rs_motor_status_t rs_motor_speed_control(rs_motor_t *motor,
 
     status = rs_motor_apply_mode(motor, RS_MOTOR_CONTROL_MODE_SPEED);
     if (status != RS_MOTOR_STATUS_OK) {
+        if (motor->state.enabled == 0U) {
+            rs_motor_cancel_multi_turn(motor);
+        }
         return status;
     }
     status = rs_motor_write_float(motor, RS_PARAM_CURRENT_LIMIT, current_limit_a);
     if (status != RS_MOTOR_STATUS_OK) {
+        if (motor->state.multi_turn.active != 0U) {
+            motor->state.control_mode =
+                RS_MOTOR_CONTROL_MODE_MULTI_TURN_POSITION;
+        }
         return status;
     }
     status = rs_motor_write_float(motor, RS_PARAM_SPEED_ACCELERATION, acceleration_rad_s2);
     if (status != RS_MOTOR_STATUS_OK) {
+        if (motor->state.multi_turn.active != 0U) {
+            motor->state.control_mode =
+                RS_MOTOR_CONTROL_MODE_MULTI_TURN_POSITION;
+        }
         return status;
     }
-    return rs_motor_write_float(motor, RS_PARAM_SPEED_TARGET, speed_rad_s);
+    status = rs_motor_write_float(motor, RS_PARAM_SPEED_TARGET, speed_rad_s);
+    if (status == RS_MOTOR_STATUS_OK) {
+        rs_motor_cancel_multi_turn(motor);
+    } else if (motor->state.multi_turn.active != 0U) {
+        motor->state.control_mode = RS_MOTOR_CONTROL_MODE_MULTI_TURN_POSITION;
+    }
+    return status;
 }
 
 rs_motor_status_t rs_motor_current_control(rs_motor_t *motor, float current_a)
@@ -539,9 +659,116 @@ rs_motor_status_t rs_motor_current_control(rs_motor_t *motor, float current_a)
 
     status = rs_motor_apply_mode(motor, RS_MOTOR_CONTROL_MODE_CURRENT);
     if (status != RS_MOTOR_STATUS_OK) {
+        if (motor->state.enabled == 0U) {
+            rs_motor_cancel_multi_turn(motor);
+        }
         return status;
     }
+    rs_motor_cancel_multi_turn(motor);
     return rs_motor_write_float(motor, RS_PARAM_CURRENT_TARGET, current_a);
+}
+
+rs_motor_status_t rs_motor_multi_turn_position_control(
+    rs_motor_t *motor,
+    float speed_limit_rad_s,
+    float acceleration_rad_s2,
+    double position_rad)
+{
+    rs_motor_status_t status = rs_motor_require_initialized(motor);
+    rs_motor_feedback_t feedback;
+
+    if (status != RS_MOTOR_STATUS_OK) {
+        return status;
+    }
+    if (rs_motor_is_finite(speed_limit_rad_s) == 0U ||
+        speed_limit_rad_s <= 0.0f ||
+        rs_motor_is_finite(acceleration_rad_s2) == 0U ||
+        acceleration_rad_s2 <= 0.0f ||
+        rs_motor_is_finite_double(position_rad) == 0U) {
+        return RS_MOTOR_STATUS_INVALID_ARGUMENT;
+    }
+    if (rs_motor_multi_turn_config_is_valid(&motor->config) == 0U) {
+        return RS_MOTOR_STATUS_INVALID_CONFIG;
+    }
+
+    if (motor->state.multi_turn.active != 0U) {
+        status = rs_motor_get_feedback(motor, &feedback);
+        if (status != RS_MOTOR_STATUS_OK) {
+            return status;
+        }
+        status = rs_motor_write_float(motor,
+                                      RS_PARAM_SPEED_ACCELERATION,
+                                      acceleration_rad_s2);
+        if (status != RS_MOTOR_STATUS_OK) {
+            return status;
+        }
+
+        motor->internal.multi_turn_speed_limit_rad_s = speed_limit_rad_s;
+        motor->internal.multi_turn_control_timer_started = 0U;
+        motor->state.multi_turn.position_reached = 0U;
+        motor->state.multi_turn.target_position_rad = position_rad;
+        if (feedback.multi_turn.valid != 0U) {
+            motor->state.multi_turn.position_error_rad =
+                position_rad - feedback.multi_turn.angle_rad;
+        } else {
+            motor->state.multi_turn.position_error_rad = position_rad;
+        }
+        motor->state.control_mode = RS_MOTOR_CONTROL_MODE_MULTI_TURN_POSITION;
+        return RS_MOTOR_STATUS_OK;
+    }
+
+    status = rs_motor_configure_multi_turn_speed_mode(motor, acceleration_rad_s2);
+    if (status != RS_MOTOR_STATUS_OK) {
+        if (motor->state.enabled == 0U) {
+            rs_motor_cancel_multi_turn(motor);
+        }
+        return status;
+    }
+
+    rs_motor_cancel_multi_turn(motor);
+    motor->internal.multi_turn_speed_limit_rad_s = speed_limit_rad_s;
+    motor->state.multi_turn.active = 1U;
+    motor->state.multi_turn.target_position_rad = position_rad;
+    motor->state.control_mode = RS_MOTOR_CONTROL_MODE_MULTI_TURN_POSITION;
+
+    status = rs_motor_get_feedback(motor, &feedback);
+    if (status != RS_MOTOR_STATUS_OK) {
+        rs_motor_cancel_multi_turn(motor);
+        return status;
+    }
+    if (feedback.multi_turn.valid != 0U) {
+        motor->state.multi_turn.position_error_rad =
+            position_rad - feedback.multi_turn.angle_rad;
+        if (motor->state.online == 0U) {
+            motor->state.multi_turn.paused_offline = 1U;
+        }
+    } else {
+        motor->state.multi_turn.position_error_rad = position_rad;
+    }
+    return RS_MOTOR_STATUS_OK;
+}
+
+rs_motor_status_t rs_motor_get_feedback(const rs_motor_t *motor,
+                                        rs_motor_feedback_t *feedback)
+{
+    uint32_t interrupt_mask;
+
+    if (motor == NULL || feedback == NULL) {
+        return RS_MOTOR_STATUS_INVALID_ARGUMENT;
+    }
+    if (motor->internal.initialized == 0U || rs_motor_find_pointer(motor) == NULL) {
+        return RS_MOTOR_STATUS_NOT_INITIALIZED;
+    }
+
+    interrupt_mask = __get_PRIMASK();
+    __disable_irq();
+    __DMB();
+    *feedback = motor->feedback;
+    __DMB();
+    if (interrupt_mask == 0U) {
+        __enable_irq();
+    }
+    return RS_MOTOR_STATUS_OK;
 }
 
 uint8_t rs_motor_handle_rx(FDCAN_HandleTypeDef *hfdcan,
@@ -555,6 +782,9 @@ uint8_t rs_motor_handle_rx(FDCAN_HandleTypeDef *hfdcan,
     uint8_t master_id;
     uint8_t motor_id;
     uint8_t run_state;
+    float angle_rad;
+    double angle_delta_rad;
+    double position_period_rad;
     rs_motor_t *motor;
 
     if (hfdcan == NULL || header == NULL || data == NULL) {
@@ -605,9 +835,10 @@ uint8_t rs_motor_handle_rx(FDCAN_HandleTypeDef *hfdcan,
     }
     motor->feedback.run_state = (rs_motor_run_state_t)run_state;
 
-    motor->feedback.angle_rad = rs_motor_u16_to_float(rs_motor_get_be_u16(&data[0]),
-                                                       motor->internal.position_min,
-                                                       motor->internal.position_max);
+    angle_rad = rs_motor_u16_to_float(rs_motor_get_be_u16(&data[0]),
+                                      motor->internal.position_min,
+                                      motor->internal.position_max);
+    motor->feedback.angle_rad = angle_rad;
     motor->feedback.speed_rad_s = rs_motor_u16_to_float(rs_motor_get_be_u16(&data[2]),
                                                          motor->internal.speed_min,
                                                          motor->internal.speed_max);
@@ -615,6 +846,24 @@ uint8_t rs_motor_handle_rx(FDCAN_HandleTypeDef *hfdcan,
                                                        motor->internal.torque_min,
                                                        motor->internal.torque_max);
     motor->feedback.temperature_c = (float)rs_motor_get_be_u16(&data[6]) / 10.0f;
+
+    if (motor->feedback.multi_turn.valid == 0U) {
+        motor->internal.previous_feedback_angle_rad = angle_rad;
+        motor->feedback.multi_turn.angle_rad = 0.0;
+        motor->feedback.multi_turn.valid = 1U;
+    } else {
+        position_period_rad = (double)motor->internal.position_max -
+                              (double)motor->internal.position_min;
+        angle_delta_rad = (double)angle_rad -
+                          (double)motor->internal.previous_feedback_angle_rad;
+        if (angle_delta_rad > position_period_rad * 0.5) {
+            angle_delta_rad -= position_period_rad;
+        } else if (angle_delta_rad < -position_period_rad * 0.5) {
+            angle_delta_rad += position_period_rad;
+        }
+        motor->feedback.multi_turn.angle_rad += angle_delta_rad;
+        motor->internal.previous_feedback_angle_rad = angle_rad;
+    }
 
     motor->state.online = 1U;
     motor->state.feedback_count++;
@@ -625,6 +874,13 @@ uint8_t rs_motor_handle_rx(FDCAN_HandleTypeDef *hfdcan,
 rs_motor_status_t rs_motor_update(rs_motor_t *motor, uint32_t now_ms)
 {
     rs_motor_status_t status = rs_motor_require_initialized(motor);
+    rs_motor_feedback_t feedback;
+    double position_error_rad;
+    double speed_command_rad_s;
+    double speed_min_rad_s;
+    double speed_max_rad_s;
+    double position_kp_s_1;
+    float speed_command_float;
 
     if (status != RS_MOTOR_STATUS_OK) {
         return status;
@@ -633,6 +889,80 @@ rs_motor_status_t rs_motor_update(rs_motor_t *motor, uint32_t now_ms)
         (uint32_t)(now_ms - motor->state.last_update_ms) >=
             motor->config.offline_timeout_ms) {
         motor->state.online = 0U;
+    }
+
+    if (motor->state.multi_turn.active == 0U) {
+        return RS_MOTOR_STATUS_OK;
+    }
+
+    status = rs_motor_get_feedback(motor, &feedback);
+    if (status != RS_MOTOR_STATUS_OK) {
+        return status;
+    }
+    if (feedback.multi_turn.valid == 0U) {
+        return RS_MOTOR_STATUS_OK;
+    }
+
+    position_error_rad = motor->state.multi_turn.target_position_rad -
+                         feedback.multi_turn.angle_rad;
+    motor->state.multi_turn.position_error_rad = position_error_rad;
+
+    if (motor->state.online == 0U) {
+        motor->state.multi_turn.position_reached = 0U;
+        if (motor->state.multi_turn.paused_offline == 0U) {
+            status = rs_motor_write_float(motor, RS_PARAM_SPEED_TARGET, 0.0f);
+            if (status != RS_MOTOR_STATUS_OK) {
+                return status;
+            }
+            motor->state.multi_turn.paused_offline = 1U;
+            motor->internal.multi_turn_control_timer_started = 0U;
+        }
+        return RS_MOTOR_STATUS_OK;
+    }
+    motor->state.multi_turn.paused_offline = 0U;
+
+    if (motor->internal.multi_turn_control_timer_started != 0U &&
+        (uint32_t)(now_ms - motor->internal.multi_turn_last_control_ms) <
+            motor->config.multi_turn.control_period_ms) {
+        return RS_MOTOR_STATUS_OK;
+    }
+    motor->internal.multi_turn_last_control_ms = now_ms;
+    motor->internal.multi_turn_control_timer_started = 1U;
+
+    if (motor->config.multi_turn.position_tolerance_rad > 0.0f &&
+        position_error_rad <=
+            (double)motor->config.multi_turn.position_tolerance_rad &&
+        position_error_rad >=
+            -(double)motor->config.multi_turn.position_tolerance_rad) {
+        motor->state.multi_turn.position_reached = 1U;
+        speed_command_float = 0.0f;
+    } else {
+        motor->state.multi_turn.position_reached = 0U;
+        speed_min_rad_s = -(double)motor->internal.multi_turn_speed_limit_rad_s;
+        if (speed_min_rad_s < (double)motor->internal.speed_min) {
+            speed_min_rad_s = (double)motor->internal.speed_min;
+        }
+        speed_max_rad_s = (double)motor->internal.multi_turn_speed_limit_rad_s;
+        if (speed_max_rad_s > (double)motor->internal.speed_max) {
+            speed_max_rad_s = (double)motor->internal.speed_max;
+        }
+
+        position_kp_s_1 = (double)motor->config.multi_turn.position_kp_s_1;
+        if (position_error_rad >= speed_max_rad_s / position_kp_s_1) {
+            speed_command_rad_s = speed_max_rad_s;
+        } else if (position_error_rad <= speed_min_rad_s / position_kp_s_1) {
+            speed_command_rad_s = speed_min_rad_s;
+        } else {
+            speed_command_rad_s = position_kp_s_1 * position_error_rad;
+        }
+        speed_command_float = (float)speed_command_rad_s;
+    }
+
+    status = rs_motor_write_float(motor,
+                                  RS_PARAM_SPEED_TARGET,
+                                  speed_command_float);
+    if (status != RS_MOTOR_STATUS_OK) {
+        return status;
     }
     return RS_MOTOR_STATUS_OK;
 }

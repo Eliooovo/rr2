@@ -38,8 +38,8 @@
 
 typedef enum {
   RS_MOTOR_TEST_WAIT_START = 0,
-  RS_MOTOR_TEST_RUNNING,
-  RS_MOTOR_TEST_DONE,
+  RS_MOTOR_TEST_MOVING_UP,
+  RS_MOTOR_TEST_RETURNING_ZERO,
   RS_MOTOR_TEST_ERROR
 } RsMotorTestPhase;
 
@@ -48,13 +48,20 @@ typedef enum {
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 
-#define RS_MOTOR_TEST_MOTOR_ID          3U
-#define RS_MOTOR_TEST_MASTER_ID         0xFDU
-#define RS_MOTOR_TEST_START_DELAY_MS    1000U
-#define RS_MOTOR_TEST_RUN_TIME_MS       2000U
-#define RS_MOTOR_TEST_CURRENT_LIMIT_A   1.0f
-#define RS_MOTOR_TEST_ACCEL_RAD_S2      2.0f
-#define RS_MOTOR_TEST_SPEED_RAD_S       1.0f
+#define RS_MOTOR_TEST_MOTOR_ID                    1U
+#define RS_MOTOR_TEST_MASTER_ID                   0xFDU
+#define RS_MOTOR_TEST_START_DELAY_MS              1000U
+#define RS_MOTOR_TEST_UP_RUN_TIME_MS               30000U
+#define RS_MOTOR_TEST_OFFLINE_TIMEOUT_MS          100U
+#define RS_MOTOR_TEST_CONTROL_PERIOD_MS            10U
+#define RS_MOTOR_TEST_CURRENT_LIMIT_A              2.0f
+#define RS_MOTOR_TEST_POSITION_KP_S_1              3.0f
+#define RS_MOTOR_TEST_POSITION_TOLERANCE_RAD       0.0f
+#define RS_MOTOR_TEST_MAX_SPEED_RAD_S              18.84955592153875943078f
+#define RS_MOTOR_TEST_ACCELERATION_RAD_S2          800.0f
+#define RS_MOTOR_TEST_UP_TARGET_DEG                7200.0
+#define RS_MOTOR_TEST_ZERO_TARGET_DEG              0.0
+#define RS_MOTOR_TEST_DEG_TO_RAD_D                 0.01745329251994329577
 
 /* USER CODE END PD */
 
@@ -72,8 +79,14 @@ static rs_motor_t s_rs_test_motor = {
     .hfdcan = &hfdcan3,
     .motor_id = RS_MOTOR_TEST_MOTOR_ID,
     .master_id = RS_MOTOR_TEST_MASTER_ID,
-    .motor_type = RS_MOTOR_TYPE_5,
-    .offline_timeout_ms = 100U,
+    .motor_type = RS_MOTOR_TYPE_0,
+    .offline_timeout_ms = RS_MOTOR_TEST_OFFLINE_TIMEOUT_MS,
+    .multi_turn = {
+      .current_limit_a = RS_MOTOR_TEST_CURRENT_LIMIT_A,
+      .position_kp_s_1 = RS_MOTOR_TEST_POSITION_KP_S_1,
+      .position_tolerance_rad = RS_MOTOR_TEST_POSITION_TOLERANCE_RAD,
+      .control_period_ms = RS_MOTOR_TEST_CONTROL_PERIOD_MS,
+    },
   },
 };
 
@@ -93,19 +106,23 @@ void SystemClock_Config(void);
 /* USER CODE BEGIN 0 */
 
 /**
- * RobStride 最小上电测试：延时后低速旋转 2 秒，随后零速并失能。
- * 任一启动报文发送失败时立即尝试失能，测试不会自动重试。
+ * RobStride 连续多圈位置测试：先向上转到 +7200°，从首条控制命令发送成功
+ * 开始计时 30 秒，再发送软件零点 0° 目标并永久运行外环保持控制。
  */
 static void RsMotor_TestRun(void)
 {
   uint32_t now_ms = HAL_GetTick();
 
-  if (g_rs_motor_test_phase == RS_MOTOR_TEST_ERROR ||
-      g_rs_motor_test_phase == RS_MOTOR_TEST_DONE) {
+  if (g_rs_motor_test_phase == RS_MOTOR_TEST_ERROR) {
     return;
   }
 
-  (void)rs_motor_update(&s_rs_test_motor, now_ms);
+  g_rs_motor_test_status = rs_motor_update(&s_rs_test_motor, now_ms);
+  if (g_rs_motor_test_status != RS_MOTOR_STATUS_OK) {
+    (void)rs_motor_disable(&s_rs_test_motor);
+    g_rs_motor_test_phase = RS_MOTOR_TEST_ERROR;
+    return;
+  }
 
   if (g_rs_motor_test_phase == RS_MOTOR_TEST_WAIT_START) {
     if ((uint32_t)(now_ms - s_rs_motor_test_phase_start_ms) <
@@ -113,11 +130,11 @@ static void RsMotor_TestRun(void)
       return;
     }
 
-    g_rs_motor_test_status = rs_motor_speed_control(
+    g_rs_motor_test_status = rs_motor_multi_turn_position_control(
         &s_rs_test_motor,
-        RS_MOTOR_TEST_CURRENT_LIMIT_A,
-        RS_MOTOR_TEST_ACCEL_RAD_S2,
-        RS_MOTOR_TEST_SPEED_RAD_S);
+        RS_MOTOR_TEST_MAX_SPEED_RAD_S,
+        RS_MOTOR_TEST_ACCELERATION_RAD_S2,
+        RS_MOTOR_TEST_UP_TARGET_DEG * RS_MOTOR_TEST_DEG_TO_RAD_D);
     if (g_rs_motor_test_status != RS_MOTOR_STATUS_OK) {
       (void)rs_motor_disable(&s_rs_test_motor);
       g_rs_motor_test_phase = RS_MOTOR_TEST_ERROR;
@@ -125,26 +142,28 @@ static void RsMotor_TestRun(void)
     }
 
     s_rs_motor_test_phase_start_ms = now_ms;
-    g_rs_motor_test_phase = RS_MOTOR_TEST_RUNNING;
+    g_rs_motor_test_phase = RS_MOTOR_TEST_MOVING_UP;
     return;
   }
 
-  if ((uint32_t)(now_ms - s_rs_motor_test_phase_start_ms) >=
-      RS_MOTOR_TEST_RUN_TIME_MS) {
-    rs_motor_status_t stop_status;
-    rs_motor_status_t disable_status;
+  if (g_rs_motor_test_phase == RS_MOTOR_TEST_MOVING_UP) {
+    if ((uint32_t)(now_ms - s_rs_motor_test_phase_start_ms) <
+        RS_MOTOR_TEST_UP_RUN_TIME_MS) {
+      return;
+    }
 
-    stop_status = rs_motor_speed_control(
+    g_rs_motor_test_status = rs_motor_multi_turn_position_control(
         &s_rs_test_motor,
-        RS_MOTOR_TEST_CURRENT_LIMIT_A,
-        RS_MOTOR_TEST_ACCEL_RAD_S2,
-        0.0f);
-    disable_status = rs_motor_disable(&s_rs_test_motor);
+        RS_MOTOR_TEST_MAX_SPEED_RAD_S,
+        RS_MOTOR_TEST_ACCELERATION_RAD_S2,
+        RS_MOTOR_TEST_ZERO_TARGET_DEG * RS_MOTOR_TEST_DEG_TO_RAD_D);
+    if (g_rs_motor_test_status != RS_MOTOR_STATUS_OK) {
+      (void)rs_motor_disable(&s_rs_test_motor);
+      g_rs_motor_test_phase = RS_MOTOR_TEST_ERROR;
+      return;
+    }
 
-    g_rs_motor_test_status = (stop_status != RS_MOTOR_STATUS_OK) ?
-                             stop_status : disable_status;
-    g_rs_motor_test_phase = (g_rs_motor_test_status == RS_MOTOR_STATUS_OK) ?
-                            RS_MOTOR_TEST_DONE : RS_MOTOR_TEST_ERROR;
+    g_rs_motor_test_phase = RS_MOTOR_TEST_RETURNING_ZERO;
   }
 }
 
@@ -214,8 +233,8 @@ int main(void)
     /* USER CODE BEGIN 3 */
     Comm_RunPeriodic();
     Chassis_RunPeriodic();
-    Lift_RunPeriodic();
-    RsMotor_TestRun();
+    // Lift_RunPeriodic();
+    // RsMotor_TestRun();
   }
   /* USER CODE END 3 */
 }

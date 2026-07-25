@@ -59,10 +59,10 @@ typedef struct {
 /* 四个轮子的实车配置，顺序必须和 ChassisWheelIndex 保持一致。 */
 #define CHASSIS_MOTOR_CONFIG_INIT                       \
     {                                                   \
-        {1U,  1, 10.0f, 80.0f, 0.03f}, /* RF 右前 */      \
-        {2U, -1, 10.0f, 80.0f, 0.03f}, /* LF 左前 */      \
-        {3U, -1, 10.0f, 80.0f, 0.03f}, /* LB 左后 */      \
-        {4U,  1, 10.0f, 80.0f, 0.03f}, /* RB 右后 */      \
+        {2U,  1, 10.0f, 80.0f, 0.03f}, /* RF 右前 */      \
+        {1U, -1, 10.0f, 80.0f, 0.03f}, /* LF 左前 */      \
+        {4U, -1, 10.0f, 80.0f, 0.03f}, /* LB 左后 */      \
+        {3U,  1, 10.0f, 80.0f, 0.03f}, /* RB 右后 */      \
     }
 
 void Chassis_Init(void);
