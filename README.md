@@ -114,13 +114,35 @@ User-adjustable lift settings are in `App/lift_app.h`:
 - `LIFT_APP_MOTOR_CONFIG_INIT`: motor ID, per-motor direction (`1` normal,
   `-1` reversed), position/speed PID, maximum speed, and current limit.
 - Control period, offline timeout, and PID integral limits.
+- `LIFT_APP_SYNC_KP_RPM_PER_DEG`, `LIFT_APP_SYNC_KD_RPM_S_PER_DEG`, and
+  `LIFT_APP_SYNC_MAX_CORRECTION_RPM`: front/rear pair synchronization gains
+  and per-motor correction limit.
+- `LIFT_APP_FOUR_SYNC_KP_RPM_PER_DEG`,
+  `LIFT_APP_FOUR_SYNC_KD_RPM_S_PER_DEG`, and
+  `LIFT_APP_FOUR_SYNC_MAX_CORRECTION_RPM`: stronger front-to-rear average
+  position synchronization gains and four-motor final correction limit.
 
-Motors 1/2 receive the front target and are not reversed; motors 3/4 receive
-the rear target and are currently reversed.
+Motors 1/2 receive the front target and motors 3/4 receive the rear target.
+Within both pairs, motor A is currently reversed and motor B is not reversed.
+All four lift motors currently use an `1800 rpm` position-loop speed limit.
+Each pair uses its normalized motor-shaft position difference to apply equal
+and opposite speed corrections. The initial synchronization controller is
+P-only (`1.0 rpm/deg`) with a per-motor correction limit of `100 rpm`; the
+configurable derivative gain initially remains zero. When the stored front and
+rear targets are exactly equal and all four feedback values are valid, an
+additional controller synchronizes the front-pair and rear-pair average
+positions with `12.0 rpm/deg`, zero derivative gain, and a `200 rpm` final
+per-motor limit. Pair and four-motor corrections are combined and uniformly
+scaled when necessary without changing the zero average of the four
+synchronization corrections.
 There is no App-level all-online or pair-online gate. An offline motor is
 independently forced to zero current by `dji_motor`, while other online motors
-continue controlling. `LIFT_APP_METERS_PER_OUTPUT_RAD` defines the output-side
-mechanical conversion as `0.01242 m/rad`, and
+continue controlling, but synchronization correction for that motor pair is
+cleared whenever either feedback is unavailable. Four-motor synchronization
+falls back to the valid pair controllers if any one of the four feedback values
+is unavailable or if the front and rear targets differ.
+`LIFT_APP_METERS_PER_OUTPUT_RAD` defines the output-side mechanical conversion
+as `0.01242 m/rad`, and
 `LIFT_APP_MOTOR_REDUCTION_RATIO` is `19.0`. Therefore one motor-shaft radian
 corresponds to `0.01242 / 19 m`. Commands and feedback are converted internally
 with `double`; the USB protocol remains `float32`.
