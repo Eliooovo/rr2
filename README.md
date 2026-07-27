@@ -200,3 +200,4 @@ cmake --build --preset Release
 
 Open `rr2.ioc` in STM32CubeMX 6.17.0 when hardware configuration changes, then
 regenerate using the configured STM32Cube H7 V1.11.2 package.
+

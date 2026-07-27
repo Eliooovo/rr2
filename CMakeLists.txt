@@ -20,6 +20,8 @@ add_executable(${CMAKE_PROJECT_NAME}
     App/chassis_app.h
     App/comm_app.c
     App/comm_app.h
+    App/kfs_lift_app.c
+    App/kfs_lift_app.h
     App/lift_app.c
     App/lift_app.h
     Device/dji_motor.c

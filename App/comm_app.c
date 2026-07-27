@@ -105,9 +105,12 @@ static void CommApp_UnpackCommand(
     g_comm_app_command.chassis_wz_rad_s = fields[2];
     g_comm_app_command.lift_front_position_m = fields[3];
     g_comm_app_command.lift_rear_position_m = fields[4];
-    for (uint8_t i = 0U; i < 6U; ++i) {
-        g_comm_app_command.reserved[i] = fields[5U + i];
-    }
+    g_comm_app_command.kfs_lift_position_m = fields[5];
+    g_comm_app_command.kfs_root_rotate_rad = fields[6];
+    g_comm_app_command.kfs_tip_rotate_rad = fields[7];
+    g_comm_app_command.kfs_grip_position_m = fields[8];
+    g_comm_app_command.weapon_rotate_rad = fields[9];
+    g_comm_app_command.weapon_grip_position_m = fields[10];
     __DMB();
     g_comm_app_command.sequence = next_sequence;
     g_comm_app_command.valid = 1U;
@@ -149,6 +152,9 @@ static void CommApp_PackFeedback(
     if (g_comm_app_feedback.lift_valid != 0U) {
         fields[3] = g_comm_app_feedback.lift_front_position_m;
         fields[4] = g_comm_app_feedback.lift_rear_position_m;
+    }
+    if (g_comm_app_feedback.kfs_lift_valid != 0U) {
+        fields[5] = g_comm_app_feedback.kfs_lift_position_m;
     }
 
     packet[0] = COMM_APP_FEEDBACK_HEAD;
@@ -193,11 +199,22 @@ void CommApp_Init(void)
     g_comm_app_command.chassis_wz_rad_s = 0.0f;
     g_comm_app_command.lift_front_position_m = 0.0f;
     g_comm_app_command.lift_rear_position_m = 0.0f;
-    for (uint8_t i = 0U; i < 6U; ++i) {
-        g_comm_app_command.reserved[i] = 0.0f;
-    }
+    g_comm_app_command.kfs_lift_position_m = 0.0f;
+    g_comm_app_command.kfs_root_rotate_rad = 0.0f;
+    g_comm_app_command.kfs_tip_rotate_rad = 0.0f;
+    g_comm_app_command.kfs_grip_position_m = 0.0f;
+    g_comm_app_command.weapon_rotate_rad = 0.0f;
+    g_comm_app_command.weapon_grip_position_m = 0.0f;
     g_comm_app_command.sequence = 0U;
     g_comm_app_command.valid = 0U;
+
+    g_comm_app_feedback.kfs_lift_position_m = 0.0f;
+    g_comm_app_feedback.kfs_root_rotate_rad = 0.0f;
+    g_comm_app_feedback.kfs_tip_rotate_rad = 0.0f;
+    g_comm_app_feedback.kfs_grip_position_m = 0.0f;
+    g_comm_app_feedback.weapon_rotate_rad = 0.0f;
+    g_comm_app_feedback.weapon_grip_position_m = 0.0f;
+    g_comm_app_feedback.kfs_lift_valid = 0U;
 }
 
 void CommApp_RunPeriodic(void)

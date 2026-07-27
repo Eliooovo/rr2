@@ -28,6 +28,7 @@
 #include "bsp_fdcan.h"
 #include "chassis_app.h"
 #include "comm_app.h"
+#include "kfs_lift_app.h"
 #include "lift_app.h"
 /* USER CODE END Includes */
 
@@ -108,6 +109,7 @@ int main(void)
   /* USER CODE BEGIN 2 */
   ChassisApp_Init();
   LiftApp_Init();
+  KfsLiftApp_Init();
   bsp_can_init();
   CommApp_Init();
   /* USER CODE END 2 */
@@ -122,6 +124,7 @@ int main(void)
     CommApp_RunPeriodic();
     ChassisApp_RunPeriodic();
     LiftApp_RunPeriodic();
+    KfsLiftApp_RunPeriodic();
   }
   /* USER CODE END 3 */
 }

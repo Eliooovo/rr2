@@ -28,7 +28,12 @@ typedef struct {
     float chassis_wz_rad_s;
     float lift_front_position_m;
     float lift_rear_position_m;
-    float reserved[6];
+    float kfs_lift_position_m;
+    float kfs_root_rotate_rad;
+    float kfs_tip_rotate_rad;
+    float kfs_grip_position_m;
+    float weapon_rotate_rad;
+    float weapon_grip_position_m;
     uint32_t sequence;
     uint8_t valid;
 } comm_app_command_t;
@@ -44,8 +49,15 @@ typedef struct {
     float chassis_wz_rad_s;
     float lift_front_position_m;
     float lift_rear_position_m;
+    float kfs_lift_position_m;
+    float kfs_root_rotate_rad;
+    float kfs_tip_rotate_rad;
+    float kfs_grip_position_m;
+    float weapon_rotate_rad;
+    float weapon_grip_position_m;
     uint8_t chassis_valid;
     uint8_t lift_valid;
+    uint8_t kfs_lift_valid;
 } comm_app_feedback_t;
 
 extern volatile comm_app_command_t g_comm_app_command;
