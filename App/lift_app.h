@@ -26,7 +26,7 @@ extern "C" {
 #define LIFT_APP_FOUR_SYNC_KD_RPM_S_PER_DEG     0.0f
 #define LIFT_APP_FOUR_SYNC_MAX_CORRECTION_RPM   200.0f
 /* 减速器输出轴转动 1 rad 对应抬升直线位移 0.01242 m。 */
-#define LIFT_APP_METERS_PER_OUTPUT_RAD           0.01242
+#define LIFT_APP_METERS_PER_OUTPUT_RAD           0.0175
 #define LIFT_APP_MOTOR_REDUCTION_RATIO           19.0
 
 typedef struct {
