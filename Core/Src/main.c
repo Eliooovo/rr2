@@ -30,6 +30,7 @@
 #include "comm_app.h"
 #include "gripper_app.h"
 #include "kfs_lift_app.h"
+#include "kfs_rotate_app.h"
 #include "lift_app.h"
 #include "rs_motor.h"
 /* USER CODE END Includes */
@@ -52,12 +53,6 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
-/* KFS 根部旋转测试：RS03 电机 CSP 位置控制（限速 ~45°/s）。 */
-static rs_motor_t s_rs03_rotate_motor;
-static volatile rs_motor_status_t s_rs03_rotate_init_status = RS_MOTOR_ERROR_NOT_INITIALIZED;
-/* 用户在 Ozone 里改这个值测试不同目标角度，单位 rad。
-   例：0.0 = 0°, 1.571 = 90°, -1.571 = -90°。 */
-static volatile float g_rs03_target_rad = 0.0f;
 
 /* USER CODE END PV */
 
@@ -69,84 +64,6 @@ void SystemClock_Config(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-
-/* ---- KFS 根部旋转测试：RS03 CSP 位置控制 ---- */
-
-static void Rs03RotateTest_Init(void)
-{
-  s_rs03_rotate_motor.config.hfdcan = &hfdcan3;
-  s_rs03_rotate_motor.config.motor_id = 2U;
-  s_rs03_rotate_motor.config.master_id = 0xFDU;
-  s_rs03_rotate_motor.config.motor_type = RS_MOTOR_TYPE_3;
-  s_rs03_rotate_motor.config.offline_timeout_ms = 100U;
-
-  s_rs03_rotate_init_status = rs_motor_init(&s_rs03_rotate_motor);
-}
-
-static void Rs03RotateTest_RunPeriodic(void)
-{
-  static uint32_t last_ctrl_ms = 0U;
-  static float last_target_rad = 0.0f;
-  uint32_t now_ms = HAL_GetTick();
-
-  if (s_rs03_rotate_init_status != RS_MOTOR_OK) {
-    return;
-  }
-
-  /* 1. 读反馈、更新可观察变量、检测离线。 */
-  {
-    static uint32_t last_fb_count = 0U;
-    rs_motor_feedback_t fb;
-
-    if (rs_motor_get_feedback(&s_rs03_rotate_motor, &fb) == RS_MOTOR_OK) {
-      /*
-       * 将角度存到 static 变量，保证 Ozone 中始终可见，不会被优化掉。
-       * 即使 rs_motor_get_feedback 尚未被调用，这些变量也持有上一次的有效值。
-       */
-      static float g_rs03_angle_rad = 0.0f;
-      static float g_rs03_angle_deg = 0.0f;
-      static uint32_t g_rs03_fb_count = 0U;
-
-      g_rs03_angle_rad = fb.angle_rad;
-      g_rs03_angle_deg = fb.angle_rad * 57.29578f;
-      g_rs03_fb_count = s_rs03_rotate_motor.state.feedback_count;
-
-      /* 反馈计数不涨 → 掉线，重置状态等下次 CSP 调用时自动重新使能。 */
-      if (s_rs03_rotate_motor.state.feedback_count == last_fb_count) {
-        s_rs03_rotate_motor.internal.mode_applied = 0U;
-        s_rs03_rotate_motor.state.enabled = 0U;
-      }
-      last_fb_count = s_rs03_rotate_motor.state.feedback_count;
-    }
-  }
-
-  /* 2. 按周期检查是否需要下发 CSP 位置控制帧。 */
-  if ((uint32_t)(now_ms - last_ctrl_ms) < 10U) {
-    return;
-  }
-  last_ctrl_ms = now_ms;
-
-  /*
-   * 目标不变且电机正常运行中 → 跳过，减少 CAN 总线负载。
-   * 例外：刚上电 (enabled=0) 或离线恢复 (mode_applied=0) 时必须下发。
-   */
-  if (g_rs03_target_rad == last_target_rad &&
-      s_rs03_rotate_motor.state.enabled != 0U &&
-      s_rs03_rotate_motor.internal.mode_applied != 0U) {
-    return;
-  }
-  last_target_rad = g_rs03_target_rad;
-
-  /*
-   * CSP（Cyclic Synchronous Position）位置控制：
-   *   speed_limit_rad_s = 0.785 rad/s ≈ 45°/s
-   *   电机内部以不超过限速的速度平滑移动到目标位置，到位后自动保持。
-   */
-  (void)rs_motor_csp_position_control(
-      &s_rs03_rotate_motor,
-      0.785f,               /* 速度上限，约 45 deg/s */
-      g_rs03_target_rad);   /* 目标角度，单圈范围 [-12.57, +12.57] rad */
-}
 
 /* USER CODE END 0 */
 
@@ -197,7 +114,7 @@ int main(void)
   LiftApp_Init();
   //KfsLiftApp_Init();
   //GripperApp_Init();
-  Rs03RotateTest_Init();
+  KfsRotateApp_Init();
   bsp_can_init();
   CommApp_Init();
   /* USER CODE END 2 */
@@ -214,7 +131,7 @@ int main(void)
     LiftApp_RunPeriodic();
     //KfsLiftApp_RunPeriodic();
     //GripperApp_RunPeriodic();
-    Rs03RotateTest_RunPeriodic();
+    KfsRotateApp_RunPeriodic();
   }
   /* USER CODE END 3 */
 }
