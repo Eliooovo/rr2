@@ -59,6 +59,7 @@ typedef struct {
     uint8_t lift_valid;
     uint8_t kfs_lift_valid;
     uint8_t kfs_root_rotate_valid;
+    uint8_t kfs_tip_rotate_valid;
 } comm_app_feedback_t;
 
 extern volatile comm_app_command_t g_comm_app_command;

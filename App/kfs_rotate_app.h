@@ -1,6 +1,6 @@
 /**
  * @file    kfs_rotate_app.h
- * @brief   KFS RS03 根部旋转 CSP 位置控制 App 配置与周期接口
+ * @brief   KFS 旋转关节 CSP 位置控制 App（根部 + 末端）配置与周期接口
  */
 
 #ifndef KFS_ROTATE_APP_H
