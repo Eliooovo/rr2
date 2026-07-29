@@ -30,6 +30,7 @@
 #include "comm_app.h"
 #include "kfs_lift_app.h"
 #include "lift_app.h"
+#include "rs_motor.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -39,6 +40,11 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+#define GRIPPER_CTRL_PERIOD_MS 10U
+#define GRIPPER_POS_CLOSE_RAD   0.0f
+#define GRIPPER_POS_OPEN_RAD   (-0.9f)
+#define GRIPPER_KP             20.0f
+#define GRIPPER_KD              0.5f
 
 /* USER CODE END PD */
 
@@ -50,6 +56,12 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
+static rs_motor_t s_rs05_test_motor;
+static volatile rs_motor_status_t s_rs05_test_init_status =
+    RS_MOTOR_ERROR_NOT_INITIALIZED;
+static volatile rs_motor_status_t s_rs05_test_enable_status =
+    RS_MOTOR_ERROR_NOT_INITIALIZED;
+static volatile int step = 0;
 
 /* USER CODE END PV */
 
@@ -61,6 +73,57 @@ void SystemClock_Config(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+static void Rs05Test_Init(void)
+{
+  s_rs05_test_motor.config.hfdcan = &hfdcan3;
+  s_rs05_test_motor.config.motor_id = 7U;
+  s_rs05_test_motor.config.master_id = 0xFDU;
+  s_rs05_test_motor.config.motor_type = RS_MOTOR_TYPE_5;
+  s_rs05_test_motor.config.offline_timeout_ms = 100U;
+
+  s_rs05_test_init_status = rs_motor_init(&s_rs05_test_motor);
+}
+
+static void GripperTest_RunPeriodic(void)
+{
+  static uint32_t last_ctrl_ms = 0U;
+  uint32_t now_ms = HAL_GetTick();
+  float target_rad;
+
+  if (s_rs05_test_init_status != RS_MOTOR_OK) {
+    return;
+  }
+
+  /* 按周期发 MIT 控制帧。 */
+  if ((uint32_t)(now_ms - last_ctrl_ms) < GRIPPER_CTRL_PERIOD_MS) {
+    return;
+  }
+  last_ctrl_ms = now_ms;
+
+  target_rad = (step == 0) ? GRIPPER_POS_CLOSE_RAD : GRIPPER_POS_OPEN_RAD;
+
+  s_rs05_test_enable_status = rs_motor_motion_control(
+      &s_rs05_test_motor,
+      0.0f,         /* torque_nm   — 零前馈 */
+      target_rad,   /* position    — 0 或 -0.3 */
+      0.0f,         /* speed       — 目标速度为零 */
+      GRIPPER_KP,   /* kp          — 位置刚度 */
+      GRIPPER_KD);  /* kd          — 速度阻尼 */
+  
+      //检查电机是否还活着
+  rs_motor_feedback_t fb;
+      if (rs_motor_get_feedback(&s_rs05_test_motor, &fb) == RS_MOTOR_OK) {
+          // feedback_count 不涨 = 掉线了
+          static uint32_t last_fb_count = 0;
+          if (s_rs05_test_motor.state.feedback_count == last_fb_count) {
+              // 超过 100ms 没新反馈 → 离线
+              // 重置状态，下次重新 enable
+              s_rs05_test_motor.internal.mode_applied = 0U;
+              s_rs05_test_motor.state.enabled = 0U;
+          }
+          last_fb_count = s_rs05_test_motor.state.feedback_count;
+      }
+}
 
 /* USER CODE END 0 */
 
@@ -109,7 +172,8 @@ int main(void)
   /* USER CODE BEGIN 2 */
   ChassisApp_Init();
   LiftApp_Init();
-  KfsLiftApp_Init();
+  //KfsLiftApp_Init();
+  Rs05Test_Init();
   bsp_can_init();
   CommApp_Init();
   /* USER CODE END 2 */
@@ -124,7 +188,8 @@ int main(void)
     CommApp_RunPeriodic();
     ChassisApp_RunPeriodic();
     LiftApp_RunPeriodic();
-    KfsLiftApp_RunPeriodic();
+    //KfsLiftApp_RunPeriodic();
+    GripperTest_RunPeriodic();
   }
   /* USER CODE END 3 */
 }
