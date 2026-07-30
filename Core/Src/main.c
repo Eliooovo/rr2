@@ -31,8 +31,8 @@
 #include "gripper_app.h"
 #include "kfs_lift_app.h"
 #include "kfs_rotate_app.h"
+#include "kfs_grip_app.h"
 #include "lift_app.h"
-#include "rs_motor.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -42,11 +42,7 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define KFS_GRIP_CTRL_PERIOD_MS 10U
-#define KFS_GRIP_POS_CLOSE_RAD   0.0f
-#define KFS_GRIP_POS_OPEN_RAD   (-0.79f)
-#define KFS_GRIP_KP             15.0f
-#define KFS_GRIP_KD              0.5f
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -57,10 +53,7 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
-static rs_motor_t s_kfs_grip_motor;
-static volatile rs_motor_status_t s_kfs_grip_init_status = RS_MOTOR_ERROR_NOT_INITIALIZED;
-static volatile rs_motor_status_t s_kfs_grip_ctrl_status = RS_MOTOR_ERROR_NOT_INITIALIZED;
-volatile int g_kfs_grip_step = 0;
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -71,64 +64,6 @@ void SystemClock_Config(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-
-static void KfsGrip_Init(void)
-{
-    s_kfs_grip_motor.config.hfdcan = &hfdcan3;
-    s_kfs_grip_motor.config.motor_id = 4U;
-    s_kfs_grip_motor.config.master_id = 0xFDU;
-    s_kfs_grip_motor.config.motor_type = RS_MOTOR_TYPE_5;
-    s_kfs_grip_motor.config.offline_timeout_ms = 100U;
-
-    s_kfs_grip_init_status = rs_motor_init(&s_kfs_grip_motor);
-}
-
-static void KfsGrip_RunPeriodic(void)
-{
-    static uint32_t last_ctrl_ms = 0U;
-    uint32_t now_ms = HAL_GetTick();
-
-    if (s_kfs_grip_init_status != RS_MOTOR_OK) {
-        return;
-    }
-
-    /* 读反馈到上位机邮箱，方便通过 USB 查看角度。 */
-    {
-        rs_motor_feedback_t fb;
-        if (rs_motor_get_feedback(&s_kfs_grip_motor, &fb) == RS_MOTOR_OK) {
-            g_comm_app_feedback.kfs_grip_position_m = fb.angle_rad;
-
-            /* 检测离线：feedback_count 停止增长 → 重置状态，下次重新使能。 */
-            static uint32_t last_fb_count = 0U;
-
-            if (s_kfs_grip_motor.state.feedback_count == last_fb_count) {
-                s_kfs_grip_motor.internal.mode_applied = 0U;
-                s_kfs_grip_motor.state.enabled = 0U;
-            }
-            last_fb_count = s_kfs_grip_motor.state.feedback_count;
-        }
-    }
-
-    /* 按周期发 MIT 控制帧。0=合（机械零点），1=开。 */
-    if ((uint32_t)(now_ms - last_ctrl_ms) < KFS_GRIP_CTRL_PERIOD_MS) {
-        return;
-    }
-    last_ctrl_ms = now_ms;
-
-    {
-        float target_rad = (g_kfs_grip_step == 0) ?
-            KFS_GRIP_POS_CLOSE_RAD :
-            KFS_GRIP_POS_OPEN_RAD;
-
-        s_kfs_grip_ctrl_status = rs_motor_motion_control(
-            &s_kfs_grip_motor,
-            0.0f,        /* torque_nm — 零前馈 */
-            target_rad,  /* position  */
-            0.0f,        /* speed     — 目标速度为零 */
-            KFS_GRIP_KP, /* kp        — 位置刚度 */
-            KFS_GRIP_KD);/* kd        — 速度阻尼 */
-    }
-}
 
 /* USER CODE END 0 */
 
@@ -180,7 +115,7 @@ int main(void)
   //KfsLiftApp_Init();
   //GripperApp_Init();
   KfsRotateApp_Init();
-  KfsGrip_Init();
+  KfsGripApp_Init();
   bsp_can_init();
   CommApp_Init();
   /* USER CODE END 2 */
@@ -198,7 +133,7 @@ int main(void)
     //KfsLiftApp_RunPeriodic();
     //GripperApp_RunPeriodic();
     KfsRotateApp_RunPeriodic();
-    KfsGrip_RunPeriodic();
+    KfsGripApp_RunPeriodic();
   }
   /* USER CODE END 3 */
 }

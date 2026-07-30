@@ -142,7 +142,6 @@ void KfsLiftApp_Init(void)
 
     KfsLiftApp_ClearFeedback();
     /* 本任务暂不控制这些协议字段，初始化为 0 保持反馈帧内容确定。 */
-    g_comm_app_feedback.kfs_grip_position_m = 0.0f;
     g_comm_app_feedback.weapon_rotate_rad = 0.0f;
     g_comm_app_feedback.weapon_grip_position_m = 0.0f;
 

@@ -26,6 +26,8 @@ add_executable(${CMAKE_PROJECT_NAME}
     App/kfs_lift_app.h
     App/kfs_rotate_app.c
     App/kfs_rotate_app.h
+    App/kfs_grip_app.c
+    App/kfs_grip_app.h
     App/lift_app.c
     App/lift_app.h
     Device/dji_motor.c
