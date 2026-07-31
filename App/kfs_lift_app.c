@@ -141,9 +141,6 @@ void KfsLiftApp_Init(void)
     }
 
     KfsLiftApp_ClearFeedback();
-    /* 本任务暂不控制这些协议字段，初始化为 0 保持反馈帧内容确定。 */
-    g_comm_app_feedback.weapon_rotate_rad = 0.0f;
-    g_comm_app_feedback.weapon_grip_position_m = 0.0f;
 
     if (KfsLiftApp_IsFiniteDouble(KFS_LIFT_APP_METERS_PER_MOTOR_RAD) == 0U ||
         KfsLiftApp_IsFiniteDouble(KFS_LIFT_APP_DIRECTION) == 0U ||

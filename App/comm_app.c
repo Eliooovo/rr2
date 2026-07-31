@@ -165,6 +165,12 @@ static void CommApp_PackFeedback(
     if (g_comm_app_feedback.kfs_grip_valid != 0U) {
         fields[8] = g_comm_app_feedback.kfs_grip_position_m;
     }
+    if (g_comm_app_feedback.weapon_rotate_valid != 0U) {
+        fields[9] = g_comm_app_feedback.weapon_rotate_rad;
+    }
+    if (g_comm_app_feedback.weapon_grip_valid != 0U) {
+        fields[10] = g_comm_app_feedback.weapon_grip_position_m;
+    }
 
     packet[0] = COMM_APP_FEEDBACK_HEAD;
     for (uint8_t i = 0U; i < COMM_APP_FLOAT_COUNT; ++i) {
@@ -227,6 +233,8 @@ void CommApp_Init(void)
     g_comm_app_feedback.kfs_root_rotate_valid = 0U;
     g_comm_app_feedback.kfs_tip_rotate_valid = 0U;
     g_comm_app_feedback.kfs_grip_valid = 0U;
+    g_comm_app_feedback.weapon_rotate_valid = 0U;
+    g_comm_app_feedback.weapon_grip_valid = 0U;
 }
 
 void CommApp_RunPeriodic(void)

@@ -28,6 +28,10 @@ add_executable(${CMAKE_PROJECT_NAME}
     App/kfs_rotate_app.h
     App/kfs_grip_app.c
     App/kfs_grip_app.h
+    App/weapon_rotate_app.c
+    App/weapon_rotate_app.h
+    App/weapon_grip_app.c
+    App/weapon_grip_app.h
     App/lift_app.c
     App/lift_app.h
     Device/dji_motor.c
@@ -36,6 +40,13 @@ add_executable(${CMAKE_PROJECT_NAME}
     Device/dji_motor_group.h
     Device/rs_motor/rs_motor.c
     Device/rs_motor/rs_motor.h
+    Device/sts_servo.c
+    Device/sts_servo.h
+    robotic_arm/SCSLib/SCS.c
+    robotic_arm/SCSLib/SCS.h
+    robotic_arm/SCSLib/SMS_STS.c
+    robotic_arm/SCSLib/SMS_STS.h
+    robotic_arm/SCSLib/INST.h
     Modules/comm_protocol.h)
 
 add_subdirectory(cmake/stm32cubemx)
@@ -53,6 +64,7 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     Bsp
     Device
     Device/rs_motor
+    robotic_arm/SCSLib
     Modules
 )
 

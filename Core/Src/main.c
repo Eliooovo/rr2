@@ -19,6 +19,7 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "fdcan.h"
+#include "stm32h7xx_hal.h"
 #include "usart.h"
 #include "usb_device.h"
 #include "gpio.h"
@@ -33,6 +34,8 @@
 #include "kfs_rotate_app.h"
 #include "kfs_grip_app.h"
 #include "lift_app.h"
+#include "weapon_rotate_app.h"
+#include "weapon_grip_app.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -109,6 +112,7 @@ int main(void)
   MX_FDCAN3_Init();
   MX_USART1_UART_Init();
   MX_USB_DEVICE_Init();
+  MX_UART7_Init();
   /* USER CODE BEGIN 2 */
   ChassisApp_Init();
   LiftApp_Init();
@@ -116,8 +120,10 @@ int main(void)
   //GripperApp_Init();
   KfsRotateApp_Init();
   KfsGripApp_Init();
+  WeaponRotateApp_Init();
   bsp_can_init();
   CommApp_Init();
+  WeaponGripApp_Init();
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -134,6 +140,8 @@ int main(void)
     //GripperApp_RunPeriodic();
     KfsRotateApp_RunPeriodic();
     KfsGripApp_RunPeriodic();
+    WeaponRotateApp_RunPeriodic();
+    WeaponGripApp_RunPeriodic();
   }
   /* USER CODE END 3 */
 }
