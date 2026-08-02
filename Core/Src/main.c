@@ -19,7 +19,7 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "fdcan.h"
-#include "stm32h7xx_hal.h"
+#include "i2c.h"
 #include "usart.h"
 #include "usb_device.h"
 #include "gpio.h"
@@ -36,6 +36,7 @@
 #include "lift_app.h"
 #include "weapon_rotate_app.h"
 #include "weapon_grip_app.h"
+#include "tof200c.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -56,7 +57,24 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
+tof200c_t g_tof200c = {
+  .config = {
+    .hi2c = &hi2c2,
+    .xshut_port = TOF_XSHUT_GPIO_Port,
+    .xshut_pin = TOF_XSHUT_Pin,
+    .int_port = TOF_INT_GPIO_Port,
+    .int_pin = TOF_INT_Pin,
+    .i2c_address_7bit = TOF200C_DEFAULT_I2C_ADDRESS_7BIT,
+    .profile = TOF200C_PROFILE_STANDARD,
+    .stale_timeout_ms = 100U,
+  },
+};
 
+volatile tof200c_status_t g_tof200c_init_status =
+    TOF200C_STATUS_NOT_INITIALIZED;
+volatile tof200c_status_t g_tof200c_read_status =
+    TOF200C_STATUS_NOT_INITIALIZED;
+volatile tof200c_feedback_t g_tof200c_latest;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -113,6 +131,7 @@ int main(void)
   MX_USART1_UART_Init();
   MX_USB_DEVICE_Init();
   MX_UART7_Init();
+  MX_I2C2_Init();
   /* USER CODE BEGIN 2 */
   ChassisApp_Init();
   LiftApp_Init();
@@ -124,6 +143,7 @@ int main(void)
   bsp_can_init();
   CommApp_Init();
   WeaponGripApp_Init();
+  g_tof200c_init_status = tof200c_init(&g_tof200c);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -133,6 +153,15 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+    tof200c_feedback_t latest;
+
+    tof200c_process(&g_tof200c);
+    g_tof200c_read_status = tof200c_get_latest(&g_tof200c, &latest);
+    if ((g_tof200c_read_status == TOF200C_STATUS_OK) ||
+        (g_tof200c_read_status == TOF200C_STATUS_STALE_DATA))
+    {
+      g_tof200c_latest = latest;
+    }
     CommApp_RunPeriodic();
     ChassisApp_RunPeriodic();
     LiftApp_RunPeriodic();
@@ -205,6 +234,25 @@ void SystemClock_Config(void)
 }
 
 /* USER CODE BEGIN 4 */
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+{
+  tof200c_on_exti_callback(&g_tof200c, GPIO_Pin);
+}
+
+void HAL_I2C_MemRxCpltCallback(I2C_HandleTypeDef *hi2c)
+{
+  tof200c_on_i2c_mem_rx_complete(&g_tof200c, hi2c);
+}
+
+void HAL_I2C_MemTxCpltCallback(I2C_HandleTypeDef *hi2c)
+{
+  tof200c_on_i2c_mem_tx_complete(&g_tof200c, hi2c);
+}
+
+void HAL_I2C_ErrorCallback(I2C_HandleTypeDef *hi2c)
+{
+  tof200c_on_i2c_error(&g_tof200c, hi2c);
+}
 
 /* USER CODE END 4 */
 
