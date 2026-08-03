@@ -9,6 +9,7 @@
 
 #include "main.h"
 #include "usbd_cdc_if.h"
+#include "rc_control.h"
 
 #define COMM_APP_FLOAT_COUNT   11U
 #define COMM_APP_PACKET_SIZE   (1U + COMM_APP_FLOAT_COUNT * 4U + 1U)
@@ -239,7 +240,9 @@ void CommApp_Init(void)
 
 void CommApp_RunPeriodic(void)
 {
-    CommApp_ParseRx();
+    if (!RcControl_IsActive()) {
+        CommApp_ParseRx();
+    }
     CommApp_SendFeedbackPeriodic();
 }
 

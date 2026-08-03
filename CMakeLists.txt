@@ -34,6 +34,8 @@ add_executable(${CMAKE_PROJECT_NAME}
     App/weapon_grip_app.h
     App/lift_app.c
     App/lift_app.h
+    App/rc_control.c
+    App/rc_control.h
     Device/dji_motor.c
     Device/dji_motor.h
     Device/dji_motor_group.c

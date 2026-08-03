@@ -189,6 +189,66 @@ static dji_motor_group_t group = {
 Use `dji_motor_get_feedback()` for an interrupt-safe snapshot of the actual
 single-turn fields and continuous multi-turn position.
 
+## 遥控器操作 (FS-i6 / IBUS)
+
+通过 FS-i6 遥控器 + IA6B/IA10B 接收机，可以在没有上位机的情况下直接控制
+底盘和升降。
+
+### 硬件接线
+
+接收机侧面 B/VCC 口（3 针竖排）：
+
+```
+USART10 口（4pin） →  FS-i6接收机 B/VCC 口（侧面竖排 3 针）
+────────────────────────────────────────────────────
+VCC  (5V)          →  VCC  (中间)
+GND                →  GND  (最下)
+RX   (PE2)         →  SENS (最上, IBUS 数据)
+TX   (PE3)         →  不接
+```
+
+> USART10 口的 VCC 由 PC15 使能（可控 5V 电源），上电后 `MX_GPIO_Init()` 自动拉高。
+
+接收机需要和遥控器**对码**后才能使用：接收机按住 BIND 键上电 → 红灯快闪 →
+遥控器进对码模式 → 红灯常亮即成功。
+
+### 通道映射
+
+| 摇杆 / 开关 | 通道 | 控制对象 | 说明 |
+|------------|------|---------|------|
+| 右摇杆 上下 | CH2 | 底盘 vx | 推上 = 前进，推下 = 后退，最大 ±1.0 m/s |
+| 右摇杆 左右 | CH1 | 底盘 vy | 推右 = 右移，推左 = 左移，最大 ±1.0 m/s |
+| 左摇杆 左右 | CH4 | 底盘 wz | 推右 = 逆时针旋转，推左 = 顺时针旋转，最大 ±3.0 rad/s |
+| 三档拨杆 SWC | CH5 | 升降 | 往上 = 平台上升，回中 = 停止，往下 = 平台下降 |
+
+升降速度 0.05 m/s，行程限制 0 ~ 0.30 m。左摇杆上下（CH3 / 油门）和两档开关
+SWA（CH6）暂未使用。
+
+> **升降方向反了？** 改 `App/rc_control.c` 里的 `RC_LIFT_DIRECTION` 为 `-1.0f`，
+> 或者在 FS-i6 遥控器菜单 `Functions → Reverse → CH5` 设为 Rev。
+
+### 遥控 vs 上位机优先级
+
+遥控有效时，上位机（USB CDC）的底盘和升降指令被忽略，但上位机仍能接收
+反馈数据（可正常监控状态）。
+
+遥控信号丢失超过 **100 ms** 后：
+- 底盘速度清零
+- 升降保持当前位置
+- 上位机控制自动恢复
+
+### 调试
+
+Ozone 中观测以下变量确认链路正常：
+
+| 变量 | 含义 | 正常值 |
+|------|------|--------|
+| `s_valid_frame_count` | 有效帧计数 | 持续递增 |
+| `s_channels[0]` | CH1 原始值 | 1000~2000，中位 ~1500 |
+| `s_vx_m_s` | 归一化 vx | 推右摇杆上下时 ±1.5 m/s |
+| `s_lift_position_m` | 累积升降位置 | CH5 拨杆往上时递增 |
+| `g_comm_app_command.valid` | RC 控制有效 | 1 |
+
 ## Build
 
 ```sh

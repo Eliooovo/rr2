@@ -37,6 +37,7 @@
 #include "weapon_rotate_app.h"
 #include "weapon_grip_app.h"
 #include "tof200c.h"
+#include "rc_control.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -65,7 +66,7 @@ tof200c_t g_tof200c = {
     .int_port = TOF_INT_GPIO_Port,
     .int_pin = TOF_INT_Pin,
     .i2c_address_7bit = TOF200C_DEFAULT_I2C_ADDRESS_7BIT,
-    .profile = TOF200C_PROFILE_STANDARD,
+    .profile = TOF200C_PROFILE_HIGH_ACCURACY,
     .stale_timeout_ms = 100U,
   },
 };
@@ -75,6 +76,7 @@ volatile tof200c_status_t g_tof200c_init_status =
 volatile tof200c_status_t g_tof200c_read_status =
     TOF200C_STATUS_NOT_INITIALIZED;
 volatile tof200c_feedback_t g_tof200c_latest;
+ 
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -129,6 +131,7 @@ int main(void)
   MX_FDCAN2_Init();
   MX_FDCAN3_Init();
   MX_USART1_UART_Init();
+  MX_USART10_UART_Init();
   MX_USB_DEVICE_Init();
   MX_UART7_Init();
   MX_I2C2_Init();
@@ -144,6 +147,7 @@ int main(void)
   CommApp_Init();
   WeaponGripApp_Init();
   g_tof200c_init_status = tof200c_init(&g_tof200c);
+  RcControl_Init();
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -162,6 +166,7 @@ int main(void)
     {
       g_tof200c_latest = latest;
     }
+    RcControl_RunPeriodic();
     CommApp_RunPeriodic();
     ChassisApp_RunPeriodic();
     LiftApp_RunPeriodic();
@@ -171,6 +176,7 @@ int main(void)
     KfsGripApp_RunPeriodic();
     WeaponRotateApp_RunPeriodic();
     WeaponGripApp_RunPeriodic();
+     
   }
   /* USER CODE END 3 */
 }
