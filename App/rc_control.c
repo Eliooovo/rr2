@@ -53,17 +53,17 @@
 #define RC_CHANNEL_DEADBAND 0.06f
 
 /* 底盘速度限幅（与 ChassisApp 内部限幅配合） */
-#define RC_MAX_VX_M_S   1.0f
-#define RC_MAX_VY_M_S   1.0f
-#define RC_MAX_WZ_RAD_S 3.0f
+#define RC_MAX_VX_M_S   0.5f
+#define RC_MAX_VY_M_S   0.5f
+#define RC_MAX_WZ_RAD_S 1.0f
 
 /* 三档拨杆升降阈值（归一化值） */
 #define RC_LIFT_UP_THRESHOLD   0.35f
 #define RC_LIFT_DOWN_THRESHOLD (-0.35f)
 
-/* 升降增量式控制参数 */
-#define RC_LIFT_RATE_M_S     0.05f  /* 拨杆推到底时升降速率 */
-#define RC_LIFT_MAX_HEIGHT_M 0.30f  /* 升降上限 */
+/* 升降离散位置步进参数（边沿触发，给 LiftApp PID 静态目标） */
+#define RC_LIFT_STEP_M      0.05f  /* 每次拨杆推一下 = ±5 cm */
+#define RC_LIFT_MAX_HEIGHT_M 0.30f /* 升降上限 */
 
 /**
  * CH5 拨杆方向。若拨杆往上打升、往下打降，设置为 1.0f；
@@ -75,9 +75,9 @@
 #define RC_LIFT_DIRECTION  -1.0f
 
 /* 时序（ms） */
-#define RC_CONTROL_PERIOD_MS 10U  /* 控制写入周期 */
 #define RC_FAILSAFE_TIMEOUT_MS 100U /* 信号丢失超时 */
 #define RC_RX_WATCHDOG_MS      2000U /* 硬件重拉间隔 */
+#define RC_YIELD_TIMEOUT_MS    2000U /* CH5 回中保持此时长后让出控制权给上位机 */
 
 /* ================================================================
  *  私有状态（全部模块静态）
@@ -96,6 +96,17 @@ static volatile float s_vx_m_s;
 static volatile float s_vy_m_s;
 static volatile float s_wz_rad_s;
 static volatile float s_lift_position_m;
+static float s_last_written_lift_m; /* 上次写入邮箱的升降位置，用于变化检测 */
+static int8_t s_lift_sw_state; /* CH5 上一次状态: 1=上, 0=回中, -1=下 */
+
+/* -- 控制权让出状态机 -- */
+typedef enum {
+    RC_CTRL_ACTIVE = 0,  /* RC 正常写入邮箱（底盘+升降+sequence+valid） */
+    RC_CTRL_YIELDED      /* RC 完全不写邮箱，USB 独占所有控制权 */
+} rc_ctrl_state_t;
+
+static rc_ctrl_state_t s_ctrl_state = RC_CTRL_ACTIVE;
+static uint32_t s_yield_enter_ms; /* CH5 初次回中的时刻（0 = 未开始计时） */
 
 /* -- 时间戳与看门狗 -- */
 /**
@@ -130,8 +141,7 @@ static volatile uint32_t s_uart_error_count;
 static float  RcControl_NormalizeChannel(uint16_t value);
 static void   RcControl_ProcessFrame(void);
 static void   RcControl_PushByte(uint8_t data);
-static void   RcControl_ApplyChannels(uint32_t now_ms,
-                                      uint32_t elapsed_ms);
+static void   RcControl_ApplyChannels(uint32_t now_ms);
 
 /* ================================================================
  *  归一化
@@ -159,6 +169,23 @@ static float RcControl_NormalizeChannel(uint16_t value)
     }
 
     return normalized;
+}
+
+/**
+ * 读取 CH5 三档拨杆当前状态。
+ * @return 1=上拨, 0=回中, -1=下拨
+ */
+static int8_t RcControl_GetCh5State(void)
+{
+    float lift_sw = RcControl_NormalizeChannel(
+        s_channels[RC_CH_LIFT]) * RC_LIFT_DIRECTION;
+
+    if (lift_sw > RC_LIFT_UP_THRESHOLD) {
+        return 1;
+    } else if (lift_sw < RC_LIFT_DOWN_THRESHOLD) {
+        return -1;
+    }
+    return 0;
 }
 
 /* ================================================================
@@ -263,14 +290,56 @@ static void RcControl_PushByte(uint8_t data)
  * ================================================================ */
 
 /**
+ * 从外部数据源同步升降累加器位置。
+ *
+ * 优先级：
+ *   1. 电机反馈（g_comm_app_feedback.lift_front_position_m）—— 物理实际位置
+ *   2. 上位机指令（g_comm_app_command.lift_front_position_m）—— 最近一次 USB 目标
+ *   3. 保持当前 s_lift_position_m（无有效外部源）
+ *
+ * 同步后钳位到 [0, RC_LIFT_MAX_HEIGHT_M] 并对齐到最近的步进网格，
+ * 使后续 CH5 边沿触发行为可预测。
+ */
+static void RcControl_SyncLiftFromExternal(void)
+{
+    float src_m = s_lift_position_m; /* 保底：维持当前值 */
+
+    if (g_comm_app_feedback.lift_valid != 0U) {
+        src_m = g_comm_app_feedback.lift_front_position_m;
+    } else if (g_comm_app_command.valid != 0U) {
+        src_m = g_comm_app_command.lift_front_position_m;
+    }
+
+    /* 钳位 */
+    if (src_m < 0.0f) {
+        src_m = 0.0f;
+    }
+    if (src_m > RC_LIFT_MAX_HEIGHT_M) {
+        src_m = RC_LIFT_MAX_HEIGHT_M;
+    }
+
+    /* 对齐到最近的离散步进网格 */
+    {
+        int32_t steps = (int32_t)((src_m / RC_LIFT_STEP_M) + 0.5f);
+        s_lift_position_m = (float)steps * RC_LIFT_STEP_M;
+    }
+
+    /* 防 float 边界情况二次钳位 */
+    if (s_lift_position_m < 0.0f) {
+        s_lift_position_m = 0.0f;
+    }
+    if (s_lift_position_m > RC_LIFT_MAX_HEIGHT_M) {
+        s_lift_position_m = RC_LIFT_MAX_HEIGHT_M;
+    }
+}
+
+/**
  * 将归一化后的通道值写入 g_comm_app_command。
  * 主循环上下文调用。
  *
- * @param now_ms      HAL_GetTick() 当前值
- * @param elapsed_ms  距上次 ApplyChannels 的毫秒数，用于 dt 缩放
+ * @param now_ms  HAL_GetTick() 当前值
  */
-static void RcControl_ApplyChannels(uint32_t now_ms,
-                                    uint32_t elapsed_ms)
+static void RcControl_ApplyChannels(uint32_t now_ms)
 {
     float right_x  = RcControl_NormalizeChannel(
         s_channels[RC_CH_RIGHT_X]);
@@ -278,21 +347,24 @@ static void RcControl_ApplyChannels(uint32_t now_ms,
         s_channels[RC_CH_RIGHT_Y]);
     float left_x   = RcControl_NormalizeChannel(
         s_channels[RC_CH_LEFT_X]);
-    float lift_sw  = RcControl_NormalizeChannel(
-        s_channels[RC_CH_LIFT]) * RC_LIFT_DIRECTION;
-    float dt_s     = (float)elapsed_ms * 0.001f;
+    int8_t sw_state = RcControl_GetCh5State();
 
     /* ---- 底盘 ---- */
-    s_vx_m_s    = right_y * RC_MAX_VX_M_S;
-    s_vy_m_s    = right_x * RC_MAX_VY_M_S;
+    s_vx_m_s    = right_x * RC_MAX_VX_M_S;
+    s_vy_m_s    = right_y * RC_MAX_VY_M_S;
     s_wz_rad_s  = -left_x * RC_MAX_WZ_RAD_S;
 
-    /* ---- 升降（增量累积 + dt 缩放） ---- */
-    if (lift_sw > RC_LIFT_UP_THRESHOLD) {
-        s_lift_position_m += RC_LIFT_RATE_M_S * dt_s;
-    } else if (lift_sw < RC_LIFT_DOWN_THRESHOLD) {
-        s_lift_position_m -= RC_LIFT_RATE_M_S * dt_s;
+    /* ---- 升降：边沿触发离散位置步进 ---- */
+
+    /* 只在 回中→上 或 回中→下 的边沿触发一次步进。
+     * 拨杆保持不动 → 目标不变 → LiftApp PID 可达稳态 → 不抖。 */
+    if (s_lift_sw_state == 0 && sw_state == 1) {
+        s_lift_position_m += RC_LIFT_STEP_M;
+    } else if (s_lift_sw_state == 0 && sw_state == -1) {
+        s_lift_position_m -= RC_LIFT_STEP_M;
     }
+    s_lift_sw_state = sw_state;
+
     /* 钳位 */
     if (s_lift_position_m < 0.0f) {
         s_lift_position_m = 0.0f;
@@ -302,11 +374,22 @@ static void RcControl_ApplyChannels(uint32_t now_ms,
     }
 
     /* ---- 写入全局命令邮箱 ---- */
-    g_comm_app_command.chassis_vx_m_s        = s_vx_m_s;
-    g_comm_app_command.chassis_vy_m_s        = s_vy_m_s;
-    g_comm_app_command.chassis_wz_rad_s      = s_wz_rad_s;
-    g_comm_app_command.lift_front_position_m = s_lift_position_m;
-    g_comm_app_command.lift_rear_position_m  = s_lift_position_m;
+    g_comm_app_command.chassis_vx_m_s   = s_vx_m_s;
+    g_comm_app_command.chassis_vy_m_s   = s_vy_m_s;
+    g_comm_app_command.chassis_wz_rad_s = s_wz_rad_s;
+
+    /*
+     * 升降只在 RC 位置变化时才写入。CH5 不动 → RC 不碰升降字段 →
+     * USB 可自由控制；CH5 拨动 → 边沿触发改变 s_lift_position_m →
+     * RC 立即写入，夺回优先权。
+     */
+    if (s_lift_position_m != s_last_written_lift_m) {
+        g_comm_app_command.lift_front_position_m =
+            s_lift_position_m;
+        g_comm_app_command.lift_rear_position_m =
+            s_lift_position_m;
+        s_last_written_lift_m = s_lift_position_m;
+    }
     /* 其它轴（KFS、武器等）保持不动：不再写入，由上一次 USB 指令保留 */
 
     __DMB();
@@ -334,7 +417,11 @@ void RcControl_Init(void)
     s_vy_m_s                 = 0.0f;
     s_wz_rad_s               = 0.0f;
     s_lift_position_m        = 0.0f;
+    s_last_written_lift_m    = 0.0f;
+    s_lift_sw_state          = 0;
     s_ever_valid             = 0U;
+    s_ctrl_state             = RC_CTRL_ACTIVE;
+    s_yield_enter_ms         = 0U;
 
     /* 清空各计数器和诊断变量 */
     s_rx_irq_count        = 0U;
@@ -358,19 +445,13 @@ void RcControl_Init(void)
 
 void RcControl_RunPeriodic(void)
 {
-    uint32_t now_ms     = HAL_GetTick();
-    uint32_t elapsed_ms;
+    uint32_t now_ms = HAL_GetTick();
 
-    /* ---- 控制周期限速 ---- */
-    if (s_last_control_ms != 0U) {
-        uint32_t diff = (uint32_t)(now_ms - s_last_control_ms);
-        if (diff < RC_CONTROL_PERIOD_MS) {
-            return;
-        }
-    }
-    elapsed_ms = (s_last_control_ms != 0U)
-                     ? (uint32_t)(now_ms - s_last_control_ms)
-                     : RC_CONTROL_PERIOD_MS;
+    /*
+     * 每个主循环周期都执行写入，配合 RC 在 CommApp 之后执行，
+     * 确保 RC 始终覆盖 USB 的底盘/升降字段。
+     * 升降采用边沿触发离散步进，不再依赖 dt 累积。
+     */
     s_last_control_ms = now_ms;
 
     /* ---- RX 硬件看门狗（2 s 无 IRQ 且从未收到有效帧 → 重拉） ---- */
@@ -405,30 +486,58 @@ void RcControl_RunPeriodic(void)
             g_comm_app_command.chassis_vx_m_s   = 0.0f;
             g_comm_app_command.chassis_vy_m_s   = 0.0f;
             g_comm_app_command.chassis_wz_rad_s = 0.0f;
-            g_comm_app_command.valid            = 0U;
             /* 升降位置保持不变（不在超时时清零，避免突然坠落） */
+
+            /* 信号丢失 → 强制让出，使上位机可接管 */
+            s_ctrl_state     = RC_CTRL_YIELDED;
+            s_yield_enter_ms = 0U;
         }
     }
 
-    /* ---- 有效信号则更新命令 ---- */
+    /* ---- 控制权状态机 ---- */
     if (s_last_valid_ms != 0U) {
-        RcControl_ApplyChannels(now_ms, elapsed_ms);
-    }
-}
+        int8_t  ch5_state    = RcControl_GetCh5State();
+        uint8_t ch5_centered = (ch5_state == 0) ? 1U : 0U;
 
-uint8_t RcControl_IsActive(void)
-{
-    if (s_last_valid_ms == 0U) {
-        return 0U;
-    }
+        if (s_ctrl_state == RC_CTRL_YIELDED) {
+            /*
+             * YIELDED：完全不写邮箱，仅跟踪 CH5 状态用于边沿检测。
+             * CH5 离开中位 → 先同步位置再回到 ACTIVE。
+             */
+            s_lift_sw_state = ch5_state;
 
-    /* 双重确认：距上次有效帧不超过超时 */
-    if ((uint32_t)(HAL_GetTick() - s_last_valid_ms) >
-        RC_FAILSAFE_TIMEOUT_MS) {
-        return 0U;
-    }
+            if (ch5_centered == 0U) {
+                /* CH5 离开中位：从外部同步实际位置后夺回控制权 */
+                RcControl_SyncLiftFromExternal();
+                s_ctrl_state     = RC_CTRL_ACTIVE;
+                s_yield_enter_ms = 0U;
+                RcControl_ApplyChannels(now_ms);
+            }
+            /* 否则继续 YIELDED，等待 CH5 动作或超时 */
+        } else { /* RC_CTRL_ACTIVE */
+            RcControl_ApplyChannels(now_ms);
 
-    return 1U;
+            /*
+             * 让出检测：CH5 持续回中超过 RC_YIELD_TIMEOUT_MS →
+             * 让出所有控制权给上位机。
+             */
+            if (ch5_centered != 0U) {
+                if (s_yield_enter_ms == 0U) {
+                    s_yield_enter_ms = now_ms;
+                } else {
+                    uint32_t yield_elapsed =
+                        (uint32_t)(now_ms - s_yield_enter_ms);
+                    if (yield_elapsed > RC_YIELD_TIMEOUT_MS) {
+                        s_ctrl_state     = RC_CTRL_YIELDED;
+                        s_yield_enter_ms = 0U;
+                    }
+                }
+            } else {
+                /* CH5 不在中位 → 复位让出计时 */
+                s_yield_enter_ms = 0U;
+            }
+        }
+    }
 }
 
 /* ================================================================

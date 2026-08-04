@@ -4,7 +4,14 @@
  *
  * 通过 USART10 接收 FS-i6 接收机（IA6B/IA10B）的 IBUS 协议帧，
  * 解析通道值并写入全局命令邮箱 g_comm_app_command，实现对底盘和
- * 升降的遥控。当遥控有效时，USB CDC 上位机命令被忽略。
+ * 升降的遥控。
+ *
+ * 控制权管理：
+ *   - 上电默认 RC 主动控制（ACTIVE）
+ *   - CH5 回中保持 2 秒 → 让出控制权给上位机（YIELDED），
+ *     此状态下 RC 不写邮箱，上位机独占所有控制权
+ *   - CH5 离开中位 → 夺回控制权，自动从电机反馈同步升降位置
+ *   - 信号丢失 → 强制让出
  */
 
 #ifndef RC_CONTROL_H
@@ -22,16 +29,11 @@ extern "C" {
 void RcControl_Init(void);
 
 /**
- * 周期处理：组帧、通道映射、超时检测。
- * 应放在主循环中调用；内部自动限速为 10 ms 周期。
+ * 周期处理：组帧、通道映射、超时检测、控制权让出状态机。
+ * 每主循环周期均执行，RC 在 CommApp 之后运行以保持优先。
+ * 应放在主循环中 CommApp_RunPeriodic() 之后调用。
  */
 void RcControl_RunPeriodic(void);
-
-/**
- * 返回 1 表示最近 RC_FAILSAFE_TIMEOUT_MS 内收到过有效 IBUS 帧，
- * 遥控器正在主动控制。
- */
-uint8_t RcControl_IsActive(void);
 
 #ifdef __cplusplus
 }

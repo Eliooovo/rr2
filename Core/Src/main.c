@@ -166,8 +166,8 @@ int main(void)
     {
       g_tof200c_latest = latest;
     }
-    RcControl_RunPeriodic();
     CommApp_RunPeriodic();
+    RcControl_RunPeriodic();
     ChassisApp_RunPeriodic();
     LiftApp_RunPeriodic();
     //KfsLiftApp_RunPeriodic();
