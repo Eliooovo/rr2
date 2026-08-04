@@ -12,7 +12,9 @@
 #define TOF200C_XSHUT_DELAY_MS 30U
 #define TOF200C_TRANSFER_TIMEOUT_MS 20U
 #define TOF200C_DATA_TIMEOUT_MS 500U
-#define TOF200C_RECOVERY_RETRY_MS 500U
+#define TOF200C_RECOVERY_RETRY_MS 5000U
+#define TOF200C_RECOVERY_BACKOFF_BASE_MS 5000U
+#define TOF200C_RECOVERY_BACKOFF_MAX_MS 60000U
 #define TOF200C_MAX_CLEAR_ATTEMPTS 3U
 
 typedef struct {
@@ -132,7 +134,15 @@ static void tof200c_mark_offline(tof200c_t *device,
   device->fault.failed_transfer_state = failed_transfer;
   device->internal.transfer_state = TOF200C_TRANSFER_IDLE;
   device->internal.data_pending = false;
-  device->internal.recovery_after_ms = now_ms + TOF200C_RECOVERY_RETRY_MS;
+  if (device->internal.recovery_backoff_ms == 0U) {
+    device->internal.recovery_backoff_ms = TOF200C_RECOVERY_BACKOFF_BASE_MS;
+  } else {
+    uint32_t next = device->internal.recovery_backoff_ms * 2U;
+    device->internal.recovery_backoff_ms =
+        (next > TOF200C_RECOVERY_BACKOFF_MAX_MS) ? TOF200C_RECOVERY_BACKOFF_MAX_MS
+                                                  : next;
+  }
+  device->internal.recovery_after_ms = now_ms + device->internal.recovery_backoff_ms;
   device->state.connection = TOF200C_CONNECTION_OFFLINE;
   device->state.changed_at_ms = now_ms;
   tof200c_exit_critical(primask);
@@ -416,6 +426,7 @@ static tof200c_status_t tof200c_start_sensor(tof200c_t *device,
   device->fault.offline_reason = TOF200C_OFFLINE_REASON_NONE;
   if (count_recovery) {
     device->fault.recovery_count++;
+    device->internal.recovery_backoff_ms = 0U;
   }
   tof200c_set_connection(device, TOF200C_CONNECTION_ONLINE);
   if (HAL_GPIO_ReadPin(config->int_port, config->int_pin) == GPIO_PIN_RESET) {

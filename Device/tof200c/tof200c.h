@@ -112,6 +112,7 @@ typedef struct {
   uint32_t measurement_started_ms;
   uint32_t sample_count_at_start;
   uint32_t recovery_after_ms;
+  uint32_t recovery_backoff_ms;
 } tof200c_internal_t;
 
 typedef struct {

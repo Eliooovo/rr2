@@ -306,9 +306,9 @@ static void RcControl_SyncLiftFromExternal(void)
 
     if (g_comm_app_feedback.lift_valid != 0U) {
         src_m = g_comm_app_feedback.lift_front_position_m;
-    } else if (g_comm_app_command.valid != 0U) {
-        src_m = g_comm_app_command.lift_front_position_m;
     }
+    /* 不回退到 g_comm_app_command：Jetson 可能持续发送全零帧，
+     * 回退会导致升降位置被错误同步为 0。无有效反馈时保持当前值。 */
 
     /* 钳位 */
     if (src_m < 0.0f) {
@@ -500,20 +500,38 @@ void RcControl_RunPeriodic(void)
         uint8_t ch5_centered = (ch5_state == 0) ? 1U : 0U;
 
         if (s_ctrl_state == RC_CTRL_YIELDED) {
-            /*
-             * YIELDED：完全不写邮箱，仅跟踪 CH5 状态用于边沿检测。
-             * CH5 离开中位 → 先同步位置再回到 ACTIVE。
-             */
-            s_lift_sw_state = ch5_state;
+            uint8_t stick_active =
+                (RcControl_NormalizeChannel(
+                     s_channels[RC_CH_RIGHT_X]) != 0.0f ||
+                 RcControl_NormalizeChannel(
+                     s_channels[RC_CH_RIGHT_Y]) != 0.0f ||
+                 RcControl_NormalizeChannel(
+                     s_channels[RC_CH_LEFT_X]) != 0.0f)
+                    ? 1U
+                    : 0U;
+            uint8_t should_regain =
+                (ch5_centered == 0U || stick_active != 0U)
+                    ? 1U
+                    : 0U;
 
-            if (ch5_centered == 0U) {
-                /* CH5 离开中位：从外部同步实际位置后夺回控制权 */
-                RcControl_SyncLiftFromExternal();
+            if (should_regain != 0U) {
+                /*
+                 * CH5 离开中位 → 同步实际升降位置（电机反馈）
+                 *   后夺回。摇杆动 → 直接夺回底盘控制权。
+                 *   注意：此处不更新 s_lift_sw_state，让
+                 *   ApplyChannels 内部的边沿检测自然看到
+                 *   真实的旧状态（YIELDED 期间保持的值）。
+                 */
+                if (ch5_centered == 0U) {
+                    RcControl_SyncLiftFromExternal();
+                }
                 s_ctrl_state     = RC_CTRL_ACTIVE;
                 s_yield_enter_ms = 0U;
                 RcControl_ApplyChannels(now_ms);
+            } else {
+                /* 继续 YIELDED：跟踪 CH5 状态供下次边沿检测 */
+                s_lift_sw_state = ch5_state;
             }
-            /* 否则继续 YIELDED，等待 CH5 动作或超时 */
         } else { /* RC_CTRL_ACTIVE */
             RcControl_ApplyChannels(now_ms);
 

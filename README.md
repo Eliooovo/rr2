@@ -249,6 +249,32 @@ Ozone 中观测以下变量确认链路正常：
 | `s_lift_position_m` | 累积升降位置 | CH5 拨杆往上时递增 |
 | `g_comm_app_command.valid` | RC 控制有效 | 1 |
 
+### TOF200C 测距调试
+
+Ozone 中观测以下变量确认 TOF 传感器工作正常：
+
+**距离数据：**
+
+| 变量 | 含义 | 正常值 |
+|------|------|--------|
+| `g_tof200c_latest.distance_mm` | 距离（毫米） | 30~2000，随目标变化 |
+| `g_tof200c_latest.range_valid` | 数据有效 | `true` (1) |
+| `g_tof200c_latest.range_status` | 测距状态码 | `0` = 正常 |
+| `g_tof200c_latest.sample_count` | 采样计数 | 持续递增（约 5 Hz） |
+| `g_tof200c_latest.timestamp_ms` | 最后一次采样时刻 | 周期性更新 |
+
+**传感器状态：**
+
+| 变量 | 含义 | 在线时 |
+|------|------|--------|
+| `g_tof200c.state.connection` | 连接状态 | `2` = ONLINE |
+| `g_tof200c.internal.recovery_backoff_ms` | 退避间隔 | `0` = 正常，非 0 = 离线重试中 |
+| `g_tof200c.fault.offline_count` | 累计离线次数 | 不变 = 稳定 |
+| `g_tof200c.fault.recovery_count` | 累计恢复次数 | 热拔插后递增 |
+| `g_tof200c_read_status` | 最近一次读取状态 | `0` = OK，`4` = STALE_DATA |
+
+**快速检测：** 把 `g_tof200c_latest.distance_mm` 加到 Watch 窗口，用手或物体在传感器前移动，数值应跟随变化。如果始终为 0 且 `range_valid = false`，检查传感器接线和 I2C2 通信。
+
 ## Build
 
 ```sh

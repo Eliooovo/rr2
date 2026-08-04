@@ -20,8 +20,10 @@ extern "C" {
 /*
  * 用户可调参数。
  */
-/* 位置控制与反馈读取周期，单位 ms。 */
+/* 位置控制周期，单位 ms。 */
 #define WEAPON_GRIP_APP_CONTROL_PERIOD_MS  50U
+/* 舵机反馈读取周期，单位 ms。小于 CONTROL_PERIOD_MS 以减少串口阻塞。 */
+#define WEAPON_GRIP_APP_FEEDBACK_PERIOD_MS 20U
 /* 舵机反馈超时判定离线的时间，单位 ms。必须大于 CONTROL_PERIOD_MS。 */
 #define WEAPON_GRIP_APP_OFFLINE_TIMEOUT_MS 200U
 /* 夹爪闭合位置对应的 raw 值（全开=2048，闭合=+90°=3072）。 */

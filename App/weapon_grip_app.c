@@ -25,6 +25,7 @@ static sts_servo_t s_servo;
 static int16_t s_target_position_raw;
 static uint32_t s_last_command_sequence;
 static uint32_t s_last_ctrl_ms;
+static uint32_t s_last_feedback_ms;
 static uint8_t s_initialized;
 static uint8_t s_target_received;
 static uint8_t s_target_applied;
@@ -195,8 +196,12 @@ void WeaponGripApp_RunPeriodic(void)
 
     now_ms = HAL_GetTick();
 
-    /* 1. 更新反馈到上位机邮箱。 */
-    WeaponGripApp_UpdateFeedback(now_ms);
+    /* 1. 更新反馈到上位机邮箱（限速以减少 UART 阻塞）。 */
+    if ((uint32_t)(now_ms - s_last_feedback_ms) >=
+        WEAPON_GRIP_APP_FEEDBACK_PERIOD_MS) {
+      WeaponGripApp_UpdateFeedback(now_ms);
+      s_last_feedback_ms = now_ms;
+    }
 
     /* 2. 更新舵机在线状态。 */
     sts_servo_update(&s_servo, now_ms);

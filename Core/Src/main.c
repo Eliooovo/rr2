@@ -158,14 +158,8 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
     tof200c_feedback_t latest;
+    static uint32_t s_last_tof_ms = 0;
 
-    tof200c_process(&g_tof200c);
-    g_tof200c_read_status = tof200c_get_latest(&g_tof200c, &latest);
-    if ((g_tof200c_read_status == TOF200C_STATUS_OK) ||
-        (g_tof200c_read_status == TOF200C_STATUS_STALE_DATA))
-    {
-      g_tof200c_latest = latest;
-    }
     CommApp_RunPeriodic();
     RcControl_RunPeriodic();
     ChassisApp_RunPeriodic();
@@ -176,6 +170,22 @@ int main(void)
     KfsGripApp_RunPeriodic();
     WeaponRotateApp_RunPeriodic();
     WeaponGripApp_RunPeriodic();
+
+    /* TOF200C: 限速 20ms 处理一次，传感器仅 ~5 Hz 出数。移到 LiftApp 之后
+       避免阻塞恢复时影响抬升/底盘 PID 时序。 */
+    {
+      uint32_t now = HAL_GetTick();
+      if ((uint32_t)(now - s_last_tof_ms) >= 20U) {
+        tof200c_process(&g_tof200c);
+        s_last_tof_ms = now;
+      }
+    }
+    g_tof200c_read_status = tof200c_get_latest(&g_tof200c, &latest);
+    if ((g_tof200c_read_status == TOF200C_STATUS_OK) ||
+        (g_tof200c_read_status == TOF200C_STATUS_STALE_DATA))
+    {
+      g_tof200c_latest = latest;
+    }
      
   }
   /* USER CODE END 3 */
