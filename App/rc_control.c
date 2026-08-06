@@ -77,7 +77,6 @@
 /* 时序（ms） */
 #define RC_FAILSAFE_TIMEOUT_MS 100U /* 信号丢失超时 */
 #define RC_RX_WATCHDOG_MS      2000U /* 硬件重拉间隔 */
-#define RC_YIELD_TIMEOUT_MS    2000U /* CH5 回中保持此时长后让出控制权给上位机 */
 
 /* ================================================================
  *  私有状态（全部模块静态）
@@ -96,7 +95,6 @@ static volatile float s_vx_m_s;
 static volatile float s_vy_m_s;
 static volatile float s_wz_rad_s;
 static volatile float s_lift_position_m;
-static float s_last_written_lift_m; /* 上次写入邮箱的升降位置，用于变化检测 */
 static int8_t s_lift_sw_state; /* CH5 上一次状态: 1=上, 0=回中, -1=下 */
 
 /* -- 控制权让出状态机 -- */
@@ -106,7 +104,6 @@ typedef enum {
 } rc_ctrl_state_t;
 
 static rc_ctrl_state_t s_ctrl_state = RC_CTRL_ACTIVE;
-static uint32_t s_yield_enter_ms; /* CH5 初次回中的时刻（0 = 未开始计时） */
 
 /* -- 时间戳与看门狗 -- */
 /**
@@ -378,19 +375,12 @@ static void RcControl_ApplyChannels(uint32_t now_ms)
     g_comm_app_command.chassis_vy_m_s   = s_vy_m_s;
     g_comm_app_command.chassis_wz_rad_s = s_wz_rad_s;
 
-    /*
-     * 升降只在 RC 位置变化时才写入。CH5 不动 → RC 不碰升降字段 →
-     * USB 可自由控制；CH5 拨动 → 边沿触发改变 s_lift_position_m →
-     * RC 立即写入，夺回优先权。
-     */
-    if (s_lift_position_m != s_last_written_lift_m) {
-        g_comm_app_command.lift_front_position_m =
-            s_lift_position_m;
-        g_comm_app_command.lift_rear_position_m =
-            s_lift_position_m;
-        s_last_written_lift_m = s_lift_position_m;
-    }
-    /* 其它轴（KFS、武器等）保持不动：不再写入，由上一次 USB 指令保留 */
+    /* 升降每轮写入，跟底盘一样。RC ACTIVE 期间上位机全零帧被覆盖。 */
+    g_comm_app_command.lift_front_position_m =
+        s_lift_position_m;
+    g_comm_app_command.lift_rear_position_m =
+        s_lift_position_m;
+    /* 其它轴（KFS、武器等）保持不动：RC 不写，上位机独享 */
 
     __DMB();
     g_comm_app_command.sequence++;
@@ -417,11 +407,9 @@ void RcControl_Init(void)
     s_vy_m_s                 = 0.0f;
     s_wz_rad_s               = 0.0f;
     s_lift_position_m        = 0.0f;
-    s_last_written_lift_m    = 0.0f;
     s_lift_sw_state          = 0;
     s_ever_valid             = 0U;
     s_ctrl_state             = RC_CTRL_ACTIVE;
-    s_yield_enter_ms         = 0U;
 
     /* 清空各计数器和诊断变量 */
     s_rx_irq_count        = 0U;
@@ -489,71 +477,23 @@ void RcControl_RunPeriodic(void)
             /* 升降位置保持不变（不在超时时清零，避免突然坠落） */
 
             /* 信号丢失 → 强制让出，使上位机可接管 */
-            s_ctrl_state     = RC_CTRL_YIELDED;
-            s_yield_enter_ms = 0U;
+            s_ctrl_state = RC_CTRL_YIELDED;
         }
     }
 
     /* ---- 控制权状态机 ---- */
     if (s_last_valid_ms != 0U) {
-        int8_t  ch5_state    = RcControl_GetCh5State();
-        uint8_t ch5_centered = (ch5_state == 0) ? 1U : 0U;
-
         if (s_ctrl_state == RC_CTRL_YIELDED) {
-            uint8_t stick_active =
-                (RcControl_NormalizeChannel(
-                     s_channels[RC_CH_RIGHT_X]) != 0.0f ||
-                 RcControl_NormalizeChannel(
-                     s_channels[RC_CH_RIGHT_Y]) != 0.0f ||
-                 RcControl_NormalizeChannel(
-                     s_channels[RC_CH_LEFT_X]) != 0.0f)
-                    ? 1U
-                    : 0U;
-            uint8_t should_regain =
-                (ch5_centered == 0U || stick_active != 0U)
-                    ? 1U
-                    : 0U;
-
-            if (should_regain != 0U) {
-                /*
-                 * CH5 离开中位 → 同步实际升降位置（电机反馈）
-                 *   后夺回。摇杆动 → 直接夺回底盘控制权。
-                 *   注意：此处不更新 s_lift_sw_state，让
-                 *   ApplyChannels 内部的边沿检测自然看到
-                 *   真实的旧状态（YIELDED 期间保持的值）。
-                 */
-                if (ch5_centered == 0U) {
-                    RcControl_SyncLiftFromExternal();
-                }
-                s_ctrl_state     = RC_CTRL_ACTIVE;
-                s_yield_enter_ms = 0U;
-                RcControl_ApplyChannels(now_ms);
-            } else {
-                /* 继续 YIELDED：跟踪 CH5 状态供下次边沿检测 */
-                s_lift_sw_state = ch5_state;
-            }
+            /*
+             * 信号恢复 → 同步升降位置（电机反馈）与 CH5 状态，
+             * 然后立即夺回控制权。CH5 状态同步避免假边沿误触发步进。
+             */
+            RcControl_SyncLiftFromExternal();
+            s_lift_sw_state = RcControl_GetCh5State();
+            s_ctrl_state    = RC_CTRL_ACTIVE;
+            RcControl_ApplyChannels(now_ms);
         } else { /* RC_CTRL_ACTIVE */
             RcControl_ApplyChannels(now_ms);
-
-            /*
-             * 让出检测：CH5 持续回中超过 RC_YIELD_TIMEOUT_MS →
-             * 让出所有控制权给上位机。
-             */
-            if (ch5_centered != 0U) {
-                if (s_yield_enter_ms == 0U) {
-                    s_yield_enter_ms = now_ms;
-                } else {
-                    uint32_t yield_elapsed =
-                        (uint32_t)(now_ms - s_yield_enter_ms);
-                    if (yield_elapsed > RC_YIELD_TIMEOUT_MS) {
-                        s_ctrl_state     = RC_CTRL_YIELDED;
-                        s_yield_enter_ms = 0U;
-                    }
-                }
-            } else {
-                /* CH5 不在中位 → 复位让出计时 */
-                s_yield_enter_ms = 0U;
-            }
         }
     }
 }

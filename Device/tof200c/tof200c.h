@@ -100,6 +100,36 @@ typedef struct {
   volatile uint32_t changed_at_ms;
 } tof200c_state_t;
 
+/*
+ * 传感器恢复状态机步骤。
+ *
+ * 把原本阻塞 ~60ms（无传感器）到 ~600ms（有传感器但需全量校准）
+ * 的 tof200c_start_sensor() 拆分成离散状态，由 tof200c_process() 在
+ * 主循环中每次调用时推进一步。
+ *
+ * 两步"等待"状态（XSHUT_LOW_WAIT、XSHUT_HIGH_WAIT）只检查时间，不阻塞。
+ * 其余"动作"状态执行一个 VL53L0X API 调用（内部有阻塞 I2C，但通常 <5ms）。
+ * 步与步之间主循环正常运转，底盘/抬升 PID 不受影响。
+ *
+ * 流程：
+ *   IDLE → XSHUT_LOW_WAIT(30ms) → XSHUT_HIGH_WAIT(30ms)
+ *        → READ_MODEL_ID → DATA_INIT → STATIC_INIT
+ *        → APPLY_PROFILE → CONFIG_GPIO → START_MEASUREMENT → DONE
+ *        → IDLE（恢复完成，切换到 ONLINE）
+ */
+typedef enum {
+  TOF200C_RECOVERY_IDLE = 0,            /* 未在恢复 */
+  TOF200C_RECOVERY_XSHUT_LOW_WAIT,      /* XSHUT 拉低（传感器断电关机）后等待 30ms */
+  TOF200C_RECOVERY_XSHUT_HIGH_WAIT,     /* XSHUT 拉高（传感器上电启动）后等待 30ms */
+  TOF200C_RECOVERY_READ_MODEL_ID,       /* 读 Model ID 确认设备存在 */
+  TOF200C_RECOVERY_DATA_INIT,           /* VL53L0X_DataInit */
+  TOF200C_RECOVERY_STATIC_INIT,         /* VL53L0X_StaticInit（含/跳过 SPAD 管理） */
+  TOF200C_RECOVERY_APPLY_PROFILE,       /* 应用测距 Profile */
+  TOF200C_RECOVERY_CONFIG_GPIO,         /* 配置 GPIO 中断输出 */
+  TOF200C_RECOVERY_START_MEASUREMENT,   /* 清除中断掩码，启动连续测距 */
+  TOF200C_RECOVERY_DONE                 /* 恢复成功 → 切换到 ONLINE */
+} tof200c_recovery_step_t;
+
 typedef struct {
   VL53L0X_Dev_t pal_dev;
   uint8_t result_buffer[12];
@@ -111,8 +141,20 @@ typedef struct {
   uint32_t transfer_started_ms;
   uint32_t measurement_started_ms;
   uint32_t sample_count_at_start;
-  uint32_t recovery_after_ms;
-  uint32_t recovery_backoff_ms;
+  uint32_t recovery_after_ms;           /* 下次可重试恢复的时刻 (HAL_GetTick) */
+  uint32_t recovery_backoff_ms;         /* 当前退避间隔，指数增长，最大 60s */
+  /* ---- 恢复状态机（非阻塞） ---- */
+  tof200c_recovery_step_t recovery_step;/* 当前恢复步骤（IDLE = 未在恢复） */
+  uint32_t recovery_step_start_ms;      /* 当前步骤开始时刻 */
+  bool recovery_is_light;               /* true=轻量恢复跳过SPAD校准, false=全量 */
+  bool reset_i2c;                       /* 是否在 XSHUT 后重置 I2C 外设 */
+  bool count_recovery;                  /* 是否计入 recovery_count */
+  /* ---- 校准缓存（首次全量初始化后保存，供轻量恢复复用） ---- */
+  uint8_t cached_vhv_settings;          /* VHV 校准值 */
+  uint8_t cached_phase_cal;             /* 相位校准值 */
+  uint32_t cached_ref_spad_count;       /* 参考 SPAD 数量 */
+  uint8_t cached_is_aperture_spads;     /* 是否使用孔径 SPAD */
+  bool calibration_cached;              /* 上述缓存是否有效 */
 } tof200c_internal_t;
 
 typedef struct {
@@ -136,8 +178,10 @@ tof200c_status_t tof200c_get_latest(const tof200c_t *device,
                                     tof200c_feedback_t *feedback);
 
 /**
- * Normal operation is non-blocking. An offline recovery attempt may briefly
- * block while the ST PAL initialization and calibration are performed.
+ * Normal operation and recovery are non-blocking. The sensor start
+ * sequence is split into discrete steps driven by repeated calls from
+ * the main loop. No step blocks for more than ~10 ms in the light
+ * recovery path.
  * Call this function continuously from the main loop.
  */
 void tof200c_process(tof200c_t *device);
