@@ -18,8 +18,8 @@
  *   CH3, CH6..CH14  → 暂不使用
  *
  * 安全性：
- *   - 100 ms 无有效帧 → 底盘速度清零，升降保持，释放 USB 控制权
- *   -   2 s 无 RX 中断且从未收到有效帧 → 重拉 USART10 接收
+ *   - 30 ms 无有效帧 → 底盘速度清零，升降保持，释放 USB 控制权
+ *   -  2 s 无 RX 中断 → 重拉 USART10 接收
  */
 
 #include "rc_control.h"
@@ -75,7 +75,7 @@
 #define RC_LIFT_DIRECTION  -1.0f
 
 /* 时序（ms） */
-#define RC_FAILSAFE_TIMEOUT_MS 100U /* 信号丢失超时 */
+#define RC_OFFLINE_TIMEOUT_MS  30U   /* 最后有效 IBUS 帧超时 */
 #define RC_RX_WATCHDOG_MS      2000U /* 硬件重拉间隔 */
 
 /* ================================================================
@@ -87,8 +87,11 @@ static uint8_t  s_rx_byte;
 static uint8_t  s_frame[RC_IBUS_FRAME_SIZE];
 static uint8_t  s_frame_pos;
 
-/* -- 解析后的通道值（ISR 写入，主循环读取） -- */
+/* -- 解析后的通道值 -- */
+/* ISR 发布区：以 s_valid_frame_count 作为帧完成标志。 */
 static volatile uint16_t s_channels[RC_IBUS_CHANNEL_COUNT];
+/* 主循环稳定快照：控制逻辑只读该数组。 */
+static uint16_t s_active_channels[RC_IBUS_CHANNEL_COUNT];
 
 /* -- 归一化后的控制量 -- */
 static volatile float s_vx_m_s;
@@ -97,32 +100,24 @@ static volatile float s_wz_rad_s;
 static volatile float s_lift_position_m;
 static int8_t s_lift_sw_state; /* CH5 上一次状态: 1=上, 0=回中, -1=下 */
 
-/* -- 控制权让出状态机 -- */
+/* -- 遥控器链路状态机 -- */
 typedef enum {
-    RC_CTRL_ACTIVE = 0,  /* RC 正常写入邮箱（底盘+升降+sequence+valid） */
-    RC_CTRL_YIELDED      /* RC 完全不写邮箱，USB 独占所有控制权 */
-} rc_ctrl_state_t;
+    RC_LINK_OFFLINE = 0, /* RC 不写邮箱，USB 接管 */
+    RC_LINK_ONLINE       /* RC 每轮覆盖底盘和升降 */
+} rc_link_state_t;
 
-static rc_ctrl_state_t s_ctrl_state = RC_CTRL_ACTIVE;
+static rc_link_state_t s_link_state = RC_LINK_OFFLINE;
 
 /* -- 时间戳与看门狗 -- */
 /**
  * 最后一次收到有效 IBUS 帧的时刻（HAL_GetTick()）。
- *
- * 【重要】此变量由 ISR（RcControl_ProcessFrame）和主循环
- * （RcControl_ApplyChannels）共同写入：
- *   - ISR 收到有效帧时立即打时间戳，这是"信号有效"的唯一标志位。
- *   - 主循环 ApplyChannels 再次刷新，防止 100ms 超时误触发。
- *
- * 不能只在 ApplyChannels 里设置：因为 s_last_valid_ms 初始为 0，
- * RunPeriodic 判断 s_last_valid_ms != 0 才会调用 ApplyChannels。
- * 若 ISR 不设值 → ApplyChannels 永远进不去 → 鸡生蛋蛋生鸡死锁。
+ * 只能由 RcControl_ProcessFrame() 在 ISR 中更新，主循环不得刷新，
+ * 否则无法检测遥控器断流。
  */
-static uint32_t s_last_valid_ms;
-static uint32_t s_last_control_ms;
+static volatile uint32_t s_last_valid_frame_ms;
+static uint32_t s_seen_valid_frame_count;
 static uint32_t s_last_rx_irq_count;
 static uint32_t s_last_watchdog_check_ms;
-static volatile uint8_t s_ever_valid;
 
 /* -- 调试计数器（volatile 便于调试器查看） -- */
 static volatile uint32_t s_rx_irq_count;
@@ -138,7 +133,8 @@ static volatile uint32_t s_uart_error_count;
 static float  RcControl_NormalizeChannel(uint16_t value);
 static void   RcControl_ProcessFrame(void);
 static void   RcControl_PushByte(uint8_t data);
-static void   RcControl_ApplyChannels(uint32_t now_ms);
+static uint32_t RcControl_SnapshotLatestFrame(uint32_t *frame_ms);
+static void   RcControl_ApplyChannels(void);
 
 /* ================================================================
  *  归一化
@@ -175,7 +171,7 @@ static float RcControl_NormalizeChannel(uint16_t value)
 static int8_t RcControl_GetCh5State(void)
 {
     float lift_sw = RcControl_NormalizeChannel(
-        s_channels[RC_CH_LIFT]) * RC_LIFT_DIRECTION;
+        s_active_channels[RC_CH_LIFT]) * RC_LIFT_DIRECTION;
 
     if (lift_sw > RC_LIFT_UP_THRESHOLD) {
         return 1;
@@ -229,17 +225,14 @@ static void RcControl_ProcessFrame(void)
             (uint16_t)((uint16_t)s_frame[3U + (uint16_t)i * 2U] << 8);
     }
 
-    /* 全部校验通过才写入全局数组 */
+    /* 全部校验通过才发布。计数器最后写入，作为
+     * 主循环判断通道数组和时间戳已完整更新的标志。 */
     for (i = 0U; i < RC_IBUS_CHANNEL_COUNT; i++) {
         s_channels[i] = channels[i];
     }
+    s_last_valid_frame_ms = HAL_GetTick();
     __DMB();
     s_valid_frame_count++;
-
-    /* 标记有效帧时间戳，使主循环能进入 ApplyChannels。
-     * 必须在 ISR 中设置，因为 ApplyChannels 以此判断是否有有效信号。 */
-    s_last_valid_ms = HAL_GetTick();
-    s_ever_valid    = 1U;
 }
 
 /**
@@ -285,6 +278,33 @@ static void RcControl_PushByte(uint8_t data)
 /* ================================================================
  *  通道映射与应用（主循环上下文）
  * ================================================================ */
+
+/**
+ * 从 ISR 发布区读取一份稳定快照。若读取期间新帧到达，
+ * 帧计数会变化，主循环重读直到前后计数一致。
+ *
+ * @param frame_ms 返回该快照对应的最后有效帧时间。
+ * @return 有效帧计数。
+ */
+static uint32_t RcControl_SnapshotLatestFrame(uint32_t *frame_ms)
+{
+    uint32_t count_before;
+    uint32_t count_after;
+    uint8_t  i;
+
+    do {
+        count_before = s_valid_frame_count;
+        __DMB();
+        *frame_ms = s_last_valid_frame_ms;
+        for (i = 0U; i < RC_IBUS_CHANNEL_COUNT; i++) {
+            s_active_channels[i] = s_channels[i];
+        }
+        __DMB();
+        count_after = s_valid_frame_count;
+    } while (count_before != count_after);
+
+    return count_after;
+}
 
 /**
  * 从外部数据源同步升降累加器位置。
@@ -333,17 +353,15 @@ static void RcControl_SyncLiftFromExternal(void)
 /**
  * 将归一化后的通道值写入 g_comm_app_command。
  * 主循环上下文调用。
- *
- * @param now_ms  HAL_GetTick() 当前值
  */
-static void RcControl_ApplyChannels(uint32_t now_ms)
+static void RcControl_ApplyChannels(void)
 {
     float right_x  = RcControl_NormalizeChannel(
-        s_channels[RC_CH_RIGHT_X]);
+        s_active_channels[RC_CH_RIGHT_X]);
     float right_y  = RcControl_NormalizeChannel(
-        s_channels[RC_CH_RIGHT_Y]);
+        s_active_channels[RC_CH_RIGHT_Y]);
     float left_x   = RcControl_NormalizeChannel(
-        s_channels[RC_CH_LEFT_X]);
+        s_active_channels[RC_CH_LEFT_X]);
     int8_t sw_state = RcControl_GetCh5State();
 
     /* ---- 底盘 ---- */
@@ -375,7 +393,7 @@ static void RcControl_ApplyChannels(uint32_t now_ms)
     g_comm_app_command.chassis_vy_m_s   = s_vy_m_s;
     g_comm_app_command.chassis_wz_rad_s = s_wz_rad_s;
 
-    /* 升降每轮写入，跟底盘一样。RC ACTIVE 期间上位机全零帧被覆盖。 */
+    /* 升降每轮写入，跟底盘一样。RC ONLINE 期间上位机全零帧被覆盖。 */
     g_comm_app_command.lift_front_position_m =
         s_lift_position_m;
     g_comm_app_command.lift_rear_position_m =
@@ -385,11 +403,6 @@ static void RcControl_ApplyChannels(uint32_t now_ms)
     __DMB();
     g_comm_app_command.sequence++;
     g_comm_app_command.valid = 1U;
-
-    s_last_valid_ms = now_ms;
-    s_ever_valid    = 1U;
-
-    (void)now_ms;
 }
 
 /* ================================================================
@@ -398,9 +411,11 @@ static void RcControl_ApplyChannels(uint32_t now_ms)
 
 void RcControl_Init(void)
 {
+    uint8_t i;
+
     s_frame_pos              = 0U;
-    s_last_valid_ms          = 0U;
-    s_last_control_ms        = 0U;
+    s_last_valid_frame_ms    = 0U;
+    s_seen_valid_frame_count = 0U;
     s_last_watchdog_check_ms = 0U;
     s_last_rx_irq_count      = 0U;
     s_vx_m_s                 = 0.0f;
@@ -408,8 +423,12 @@ void RcControl_Init(void)
     s_wz_rad_s               = 0.0f;
     s_lift_position_m        = 0.0f;
     s_lift_sw_state          = 0;
-    s_ever_valid             = 0U;
-    s_ctrl_state             = RC_CTRL_ACTIVE;
+    s_link_state             = RC_LINK_OFFLINE;
+
+    for (i = 0U; i < RC_IBUS_CHANNEL_COUNT; i++) {
+        s_channels[i]        = 0U;
+        s_active_channels[i] = 0U;
+    }
 
     /* 清空各计数器和诊断变量 */
     s_rx_irq_count        = 0U;
@@ -433,23 +452,24 @@ void RcControl_Init(void)
 
 void RcControl_RunPeriodic(void)
 {
-    uint32_t now_ms = HAL_GetTick();
+    uint32_t frame_ms;
+    uint32_t frame_count = RcControl_SnapshotLatestFrame(&frame_ms);
+    uint32_t now_ms      = HAL_GetTick();
+    uint8_t  new_valid_frame =
+        (frame_count != s_seen_valid_frame_count) ? 1U : 0U;
 
-    /*
-     * 每个主循环周期都执行写入，配合 RC 在 CommApp 之后执行，
-     * 确保 RC 始终覆盖 USB 的底盘/升降字段。
-     * 升降采用边沿触发离散步进，不再依赖 dt 累积。
-     */
-    s_last_control_ms = now_ms;
+    if (new_valid_frame != 0U) {
+        s_seen_valid_frame_count = frame_count;
+    }
 
-    /* ---- RX 硬件看门狗（2 s 无 IRQ 且从未收到有效帧 → 重拉） ---- */
+    /* ---- RX 硬件看门狗（2 s 无 IRQ → 重拉） ---- */
     {
         uint32_t wd_elapsed =
             (uint32_t)(now_ms - s_last_watchdog_check_ms);
 
-        if (wd_elapsed > RC_RX_WATCHDOG_MS) {
-            if (s_rx_irq_count == s_last_rx_irq_count &&
-                s_ever_valid == 0U) {
+        if (wd_elapsed >= RC_RX_WATCHDOG_MS) {
+            if (s_rx_irq_count == s_last_rx_irq_count) {
+                s_frame_pos = 0U;
                 (void)HAL_UART_AbortReceive_IT(&huart10);
                 __HAL_UART_CLEAR_PEFLAG(&huart10);
                 (void)HAL_UART_Receive_IT(&huart10, &s_rx_byte,
@@ -460,13 +480,34 @@ void RcControl_RunPeriodic(void)
         }
     }
 
-    /* ---- 信号超时检测（100 ms） ---- */
-    if (s_last_valid_ms != 0U) {
-        uint32_t elapsed =
-            (uint32_t)(now_ms - s_last_valid_ms);
+    /* ---- 遥控器链路状态机 ---- */
+    if (s_link_state == RC_LINK_OFFLINE) {
+        uint32_t frame_elapsed = (uint32_t)(now_ms - frame_ms);
 
-        if (elapsed > RC_FAILSAFE_TIMEOUT_MS) {
-            s_last_valid_ms = 0U;
+        if (new_valid_frame != 0U &&
+            frame_elapsed < RC_OFFLINE_TIMEOUT_MS) {
+            /* 首帧/恢复帧到达：以实际升降位置重建累加器，
+             * 并同步 CH5 状态，避免上线时产生虚假边沿。 */
+            RcControl_SyncLiftFromExternal();
+            s_lift_sw_state = RcControl_GetCh5State();
+            s_link_state    = RC_LINK_ONLINE;
+            RcControl_ApplyChannels();
+        }
+    } else { /* RC_LINK_ONLINE */
+        uint32_t frame_elapsed = (uint32_t)(now_ms - frame_ms);
+
+        if (frame_elapsed >= RC_OFFLINE_TIMEOUT_MS) {
+            /* 超时前再取一次新帧，避免临界时刻误下线。 */
+            __DMB();
+            if (s_valid_frame_count != frame_count) {
+                frame_count = RcControl_SnapshotLatestFrame(&frame_ms);
+                s_seen_valid_frame_count = frame_count;
+                now_ms = HAL_GetTick();
+                frame_elapsed = (uint32_t)(now_ms - frame_ms);
+            }
+        }
+
+        if (frame_elapsed >= RC_OFFLINE_TIMEOUT_MS) {
             s_vx_m_s        = 0.0f;
             s_vy_m_s        = 0.0f;
             s_wz_rad_s      = 0.0f;
@@ -475,25 +516,10 @@ void RcControl_RunPeriodic(void)
             g_comm_app_command.chassis_vy_m_s   = 0.0f;
             g_comm_app_command.chassis_wz_rad_s = 0.0f;
             /* 升降位置保持不变（不在超时时清零，避免突然坠落） */
-
-            /* 信号丢失 → 强制让出，使上位机可接管 */
-            s_ctrl_state = RC_CTRL_YIELDED;
-        }
-    }
-
-    /* ---- 控制权状态机 ---- */
-    if (s_last_valid_ms != 0U) {
-        if (s_ctrl_state == RC_CTRL_YIELDED) {
-            /*
-             * 信号恢复 → 同步升降位置（电机反馈）与 CH5 状态，
-             * 然后立即夺回控制权。CH5 状态同步避免假边沿误触发步进。
-             */
-            RcControl_SyncLiftFromExternal();
-            s_lift_sw_state = RcControl_GetCh5State();
-            s_ctrl_state    = RC_CTRL_ACTIVE;
-            RcControl_ApplyChannels(now_ms);
-        } else { /* RC_CTRL_ACTIVE */
-            RcControl_ApplyChannels(now_ms);
+            s_link_state = RC_LINK_OFFLINE;
+        } else {
+            /* RC 在 CommApp 之后运行，在线时每轮覆盖 USB 底盘/升降。 */
+            RcControl_ApplyChannels();
         }
     }
 }
