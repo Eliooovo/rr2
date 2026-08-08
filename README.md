@@ -88,9 +88,8 @@ User-adjustable chassis settings are in `App/chassis_app.h`:
 - Wheel dimensions, chassis dimensions, reduction ratio, current limit,
   offline timeout, and control period.
 
-The logical wheel order is `RF, LF, LB, RB`. The current vehicle is numbered
-clockwise from the left-front wheel as IDs `1, 2, 3, 4`, so the table maps
-`RF=2, LF=1, LB=4, RB=3`.
+The logical wheel order is `RF, LF, LB, RB`. The current vehicle mapping is
+`LF=1, LB=2, RB=3, RF=4`.
 
 The inverse kinematics are:
 
@@ -122,8 +121,9 @@ User-adjustable lift settings are in `App/lift_app.h`:
   `LIFT_APP_FOUR_SYNC_MAX_CORRECTION_RPM`: stronger front-to-rear average
   position synchronization gains and four-motor final correction limit.
 
-Motors 1/2 receive the front target and motors 3/4 receive the rear target.
-Within both pairs, motor A is currently reversed and motor B is not reversed.
+The lift uses the same physical mapping as the chassis:
+`LF=1, LB=2, RB=3, RF=4`. Motors 1/4 receive the front target and motors 2/3
+receive the rear target. LF/RB are currently reversed; RF/LB are not reversed.
 All four lift motors currently use an `1800 rpm` position-loop speed limit.
 Each pair uses its normalized motor-shaft position difference to apply equal
 and opposite speed corrections. The initial synchronization controller is
@@ -288,4 +288,3 @@ Open `rr2.ioc` in STM32CubeMX 6.17.0 when hardware configuration changes, then
 regenerate using the configured STM32Cube H7 V1.11.2 package.
 
 deg ≈ rad × 57.3
-

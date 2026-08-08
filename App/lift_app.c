@@ -19,10 +19,10 @@
     (LIFT_APP_METERS_PER_OUTPUT_RAD / LIFT_APP_MOTOR_REDUCTION_RATIO)
 
 enum {
-    LIFT_MOTOR_FRONT_A = 0,
-    LIFT_MOTOR_FRONT_B,
-    LIFT_MOTOR_REAR_A,
-    LIFT_MOTOR_REAR_B,
+    LIFT_MOTOR_LF = 0,
+    LIFT_MOTOR_RF,
+    LIFT_MOTOR_RB,
+    LIFT_MOTOR_LB,
     LIFT_MOTOR_COUNT
 };
 
@@ -45,8 +45,8 @@ static const lift_app_motor_config_t s_motor_config[LIFT_MOTOR_COUNT] =
     LIFT_APP_MOTOR_CONFIG_INIT;
 static const uint8_t
     s_sync_motor_indexes[LIFT_SYNC_PAIR_COUNT][2] = {
-        {LIFT_MOTOR_FRONT_A, LIFT_MOTOR_FRONT_B},
-        {LIFT_MOTOR_REAR_A, LIFT_MOTOR_REAR_B},
+        {LIFT_MOTOR_LF, LIFT_MOTOR_RF},
+        {LIFT_MOTOR_LB, LIFT_MOTOR_RB},
     };
 static dji_motor_t s_motors[LIFT_MOTOR_COUNT];
 static dji_motor_group_t s_groups[LIFT_GROUP_CAPACITY];
@@ -221,8 +221,8 @@ static void LiftApp_UpdateFourMotorSync(uint32_t now_ms,
     double maximum_correction_rpm = 0.0;
     double scale = 1.0;
 
-    if (s_target_position_rad[LIFT_MOTOR_FRONT_A] !=
-        s_target_position_rad[LIFT_MOTOR_REAR_A]) {
+    if (s_target_position_rad[LIFT_MOTOR_LF] !=
+        s_target_position_rad[LIFT_MOTOR_LB]) {
         LiftApp_ResetSyncController(&s_four_motor_sync_controller);
         return;
     }
@@ -245,11 +245,11 @@ static void LiftApp_UpdateFourMotorSync(uint32_t now_ms,
     }
 
     front_average_deg =
-        (position_deg[LIFT_MOTOR_FRONT_A] +
-         position_deg[LIFT_MOTOR_FRONT_B]) * 0.5;
+        (position_deg[LIFT_MOTOR_LF] +
+         position_deg[LIFT_MOTOR_RF]) * 0.5;
     rear_average_deg =
-        (position_deg[LIFT_MOTOR_REAR_A] +
-         position_deg[LIFT_MOTOR_REAR_B]) * 0.5;
+        (position_deg[LIFT_MOTOR_LB] +
+         position_deg[LIFT_MOTOR_RB]) * 0.5;
     error_deg = front_average_deg - rear_average_deg;
     if (LiftApp_IsFiniteDouble(error_deg) == 0U) {
         LiftApp_ResetSyncController(&s_four_motor_sync_controller);
@@ -265,7 +265,7 @@ static void LiftApp_UpdateFourMotorSync(uint32_t now_ms,
         LIFT_APP_FOUR_SYNC_MAX_CORRECTION_RPM);
     for (uint8_t i = 0U; i < LIFT_MOTOR_COUNT; ++i) {
         double cross_correction_rpm =
-            (i == LIFT_MOTOR_FRONT_A || i == LIFT_MOTOR_FRONT_B) ?
+            (i == LIFT_MOTOR_LF || i == LIFT_MOTOR_RF) ?
             -output_rpm : output_rpm;
         double magnitude;
 
@@ -367,9 +367,9 @@ static void LiftApp_UpdateTargetsFromCommand(void)
             (double)front_position_m /
             LIFT_APP_METERS_PER_MOTOR_RAD_D;
 
-        s_target_position_rad[LIFT_MOTOR_FRONT_A] =
+        s_target_position_rad[LIFT_MOTOR_LF] =
             front_position_rad;
-        s_target_position_rad[LIFT_MOTOR_FRONT_B] =
+        s_target_position_rad[LIFT_MOTOR_RF] =
             front_position_rad;
     }
     if (LiftApp_IsFinite(rear_position_m) != 0U) {
@@ -377,9 +377,9 @@ static void LiftApp_UpdateTargetsFromCommand(void)
             (double)rear_position_m /
             LIFT_APP_METERS_PER_MOTOR_RAD_D;
 
-        s_target_position_rad[LIFT_MOTOR_REAR_A] =
+        s_target_position_rad[LIFT_MOTOR_LB] =
             rear_position_rad;
-        s_target_position_rad[LIFT_MOTOR_REAR_B] =
+        s_target_position_rad[LIFT_MOTOR_RB] =
             rear_position_rad;
     }
 }
@@ -408,11 +408,11 @@ static void LiftApp_UpdateFeedback(uint32_t now_ms)
     }
 
     g_comm_app_feedback.lift_front_position_m =
-        (float)((position_m[LIFT_MOTOR_FRONT_A] +
-                 position_m[LIFT_MOTOR_FRONT_B]) * 0.5);
+        (float)((position_m[LIFT_MOTOR_LF] +
+                 position_m[LIFT_MOTOR_RF]) * 0.5);
     g_comm_app_feedback.lift_rear_position_m =
-        (float)((position_m[LIFT_MOTOR_REAR_A] +
-                 position_m[LIFT_MOTOR_REAR_B]) * 0.5);
+        (float)((position_m[LIFT_MOTOR_LB] +
+                 position_m[LIFT_MOTOR_RB]) * 0.5);
     g_comm_app_feedback.lift_valid = 1U;
 }
 

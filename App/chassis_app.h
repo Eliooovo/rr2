@@ -24,9 +24,9 @@ extern "C" {
 #define CHASSIS_APP_MOTOR_REDUCTION_RATIO   19.0f
 
 /* 上位机命令进入运动学解算前的执行倍率。 */
-#define CHASSIS_APP_VX_SCALE                1.4f
-#define CHASSIS_APP_VY_SCALE                1.84f
-#define CHASSIS_APP_WZ_SCALE                1.07f
+#define CHASSIS_APP_VX_SCALE                0.924f
+#define CHASSIS_APP_VY_SCALE                1.15f
+#define CHASSIS_APP_WZ_SCALE                0.9f
 
 /* 坐标方向配置：只能使用 1.0f 或 -1.0f。 */
 #define CHASSIS_APP_VX_DIRECTION            (-1.0f)
@@ -43,14 +43,13 @@ typedef struct {
 /**
  * 电机顺序固定为 RF、LF、LB、RB。
  *
- * 当前实车从左前开始顺时针为 ID 1、2、3、4，因此逻辑映射为
- * RF=2、LF=1、LB=4、RB=3。
+ * 当前实车映射为 LF=1、LB=2、RB=3、RF=4。
  */
 #define CHASSIS_APP_MOTOR_CONFIG_INIT                    \
     {                                                    \
-        {2U,  1, 10.0f, 80.0f, 0.03f}, /* RF 右前 */    \
+        {4U,  1, 10.0f, 80.0f, 0.03f}, /* RF 右前 */    \
         {1U, -1, 10.0f, 80.0f, 0.03f}, /* LF 左前 */    \
-        {4U, -1, 10.0f, 80.0f, 0.03f}, /* LB 左后 */    \
+        {2U, -1, 10.0f, 80.0f, 0.03f}, /* LB 左后 */    \
         {3U,  1, 10.0f, 80.0f, 0.03f}, /* RB 右后 */    \
     }
 
