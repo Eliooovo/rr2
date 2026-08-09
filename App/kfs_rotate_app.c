@@ -120,24 +120,16 @@ static void KfsRotateJoint_UpdateFeedback(kfs_rotate_joint_t *joint,
 static void KfsRotateJoint_RunPeriodic(kfs_rotate_joint_t *joint,
                                        uint32_t now_ms)
 {
+    /* 离线判断由驱动按反馈时间戳处理，不能按主循环次数判断。 */
+    if (rs_motor_update(&joint->motor, now_ms) != RS_MOTOR_OK) {
+        KfsRotateJoint_FailAndDisable(joint);
+        return;
+    }
+
     /* 1. 更新反馈到上位机邮箱。 */
     KfsRotateJoint_UpdateFeedback(joint, now_ms);
 
-    /* 2. 检测离线：feedback_count 不涨 → 重置状态等下次 CSP 自动重新使能。 */
-    {
-        static uint32_t last_fb_count_root = 0U;
-        static uint32_t last_fb_count_tip = 0U;
-        uint32_t *last_fb_count =
-            (joint == &s_root) ? &last_fb_count_root : &last_fb_count_tip;
-
-        if (joint->motor.state.feedback_count == *last_fb_count) {
-            joint->motor.internal.mode_applied = 0U;
-            joint->motor.state.enabled = 0U;
-        }
-        *last_fb_count = joint->motor.state.feedback_count;
-    }
-
-    /* 3. 按周期检查命令、下发 CSP。 */
+    /* 2. 按周期检查命令、下发 CSP。 */
     if ((uint32_t)(now_ms - joint->last_ctrl_ms) <
         KFS_ROTATE_APP_CTRL_PERIOD_MS) {
         return;
@@ -154,13 +146,9 @@ static void KfsRotateJoint_RunPeriodic(kfs_rotate_joint_t *joint,
         return;
     }
 
-    /*
-     * 目标已下发且电机正常运行 → 跳过，减少 CAN 总线负载。
-     * 例外：刚上电 (mode_applied=0) 或离线恢复时必须重新下发。
-     */
+    /* 目标已下发且驱动已记录使能 → 跳过，减少 CAN 总线负载。 */
     if (joint->target_applied != 0U &&
-        joint->motor.state.enabled != 0U &&
-        joint->motor.internal.mode_applied != 0U) {
+        joint->motor.state.enabled != 0U) {
         return;
     }
 

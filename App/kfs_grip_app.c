@@ -197,21 +197,16 @@ void KfsGripApp_RunPeriodic(void)
 
     now_ms = HAL_GetTick();
 
+    /* 离线判断由驱动按反馈时间戳处理，不能按主循环次数判断。 */
+    if (rs_motor_update(&s_motor, now_ms) != RS_MOTOR_OK) {
+        KfsGripApp_FailAndDisable();
+        return;
+    }
+
     /* 1. 更新反馈到上位机邮箱。 */
     KfsGripApp_UpdateFeedback(now_ms);
 
-    /* 2. 检测离线：feedback_count 不涨 → 重置状态等下次 MIT 自动重新使能。 */
-    {
-        static uint32_t last_fb_count = 0U;
-
-        if (s_motor.state.feedback_count == last_fb_count) {
-            s_motor.internal.mode_applied = 0U;
-            s_motor.state.enabled = 0U;
-        }
-        last_fb_count = s_motor.state.feedback_count;
-    }
-
-    /* 3. 按周期检查命令、下发 MIT 控制帧。 */
+    /* 2. 按周期检查命令、下发 MIT 控制帧。 */
     if ((uint32_t)(now_ms - s_last_ctrl_ms) <
         KFS_GRIP_APP_CTRL_PERIOD_MS) {
         return;
@@ -228,13 +223,9 @@ void KfsGripApp_RunPeriodic(void)
         return;
     }
 
-    /*
-     * 目标已下发且电机正常运行 → 跳过，减少 CAN 总线负载。
-     * 例外：刚上电 (mode_applied=0) 或离线恢复时必须重新下发。
-     */
+    /* 目标已下发且驱动已记录使能 → 跳过，减少 CAN 总线负载。 */
     if (s_target_applied != 0U &&
-        s_motor.state.enabled != 0U &&
-        s_motor.internal.mode_applied != 0U) {
+        s_motor.state.enabled != 0U) {
         return;
     }
 

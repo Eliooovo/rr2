@@ -38,20 +38,10 @@ void GripperApp_RunPeriodic(void)
         return;
     }
 
-    /* 检测离线：feedback_count 停止增长 → 重置状态，下次重新使能。 */
-    {
-        rs_motor_feedback_t fb;
-        if (rs_motor_get_feedback(&s_motor, &fb) == RS_MOTOR_OK) {
-            static uint32_t last_fb_count = 0U;
-
-            if (s_motor.state.feedback_count == last_fb_count) {
-                // 超过 100ms 没新反馈 → 离线
-                // 重置状态，下次重新 enable
-                s_motor.internal.mode_applied = 0U;
-                s_motor.state.enabled = 0U;
-            }
-            last_fb_count = s_motor.state.feedback_count;
-        }
+    /* 离线判断由驱动按反馈时间戳处理，不能按主循环次数判断。 */
+    s_ctrl_status = rs_motor_update(&s_motor, now_ms);
+    if (s_ctrl_status != RS_MOTOR_OK) {
+        return;
     }
 
     /* 按周期发 MIT 控制帧。 */
