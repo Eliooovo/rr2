@@ -1,9 +1,9 @@
 /**
  * @file    kfs_grip_app.h
- * @brief   KFS 夹爪开合 RS05 MIT 控制 App 配置与周期接口
+ * @brief   KFS 夹爪开合 RS05 限流 CSP 控制 App 配置与周期接口
  *
  * 电机型号 RS05 (RS_MOTOR_TYPE_5)，CAN ID=4，挂载在 FDCAN3。
- * 使用 MIT 阻抗控制（位置 + 速度阻尼），依赖机械零位。
+ * 使用带电流和速度限制的 CSP 位置控制，依赖机械零位。
  *
  * 上位机命令和反馈使用 m；App 内部转换为电机单圈角度 rad。
  * 实车联调时优先只调整 METERS_PER_MOTOR_RAD 和 DIRECTION。
@@ -21,7 +21,7 @@ extern "C" {
 /*
  * 用户可调参数。
  */
-/* MIT 控制帧下发周期，单位 ms。 */
+/* CSP 位置目标下发周期，单位 ms。 */
 #define KFS_GRIP_APP_CTRL_PERIOD_MS       10U
 /* 电机反馈超时判定离线的时间，单位 ms。必须大于 CTRL_PERIOD_MS。 */
 #define KFS_GRIP_APP_OFFLINE_TIMEOUT_MS    100U
@@ -35,10 +35,10 @@ extern "C" {
  * -1.0：rad 负 = 打开方向 = 米正方向。
  */
 #define KFS_GRIP_APP_DIRECTION             (-1.0)
-/* MIT 位置刚度 Kp。 */
-#define KFS_GRIP_APP_KP                    15.0f
-/* MIT 速度阻尼 Kd。 */
-#define KFS_GRIP_APP_KD                     0.5f
+/* CSP 电流上限，单位 A。约对应 0.6 N.m 电机输出力矩。 */
+#define KFS_GRIP_APP_CSP_CURRENT_LIMIT_A        0.9f
+/* CSP 速度上限，单位 rad/s；约对应 15.2 mm/s 夹爪线速度。 */
+#define KFS_GRIP_APP_CSP_SPEED_LIMIT_RAD_S      0.6f
 
 void KfsGripApp_Init(void);
 void KfsGripApp_RunPeriodic(void);

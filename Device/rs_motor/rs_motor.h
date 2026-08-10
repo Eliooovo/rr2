@@ -144,10 +144,13 @@ typedef struct {
 
     float previous_feedback_angle_rad;
     float multi_turn_speed_limit_rad_s;
+    float csp_current_limit_a;
+    float csp_speed_limit_rad_s;
     uint32_t multi_turn_last_control_ms;
 
     uint8_t initialized;
     uint8_t mode_applied;
+    uint8_t csp_limited_parameters_applied;
     uint8_t multi_turn_control_timer_started;
     rs_motor_control_mode_t applied_control_mode;
     rs_motor_t *next;
@@ -184,6 +187,13 @@ rs_motor_status_t rs_motor_pp_position_control(rs_motor_t *motor,
 rs_motor_status_t rs_motor_csp_position_control(rs_motor_t *motor,
                                                 float speed_limit_rad_s,
                                                 float position_rad);
+
+/** CSP 模式：电流限制、速度限制、目标位置。 */
+rs_motor_status_t rs_motor_csp_position_control_limited(
+    rs_motor_t *motor,
+    float current_limit_a,
+    float speed_limit_rad_s,
+    float position_rad);
 
 /** 速度模式：电流限制、加速度、目标速度。 */
 rs_motor_status_t rs_motor_speed_control(rs_motor_t *motor,

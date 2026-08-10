@@ -558,11 +558,16 @@ rs_motor_status_t rs_motor_pp_position_control(rs_motor_t *motor,
     return rs_motor_write_float(motor, RS_PARAM_POSITION_TARGET, position_rad);
 }
 
-rs_motor_status_t rs_motor_csp_position_control(rs_motor_t *motor,
-                                                float speed_limit_rad_s,
-                                                float position_rad)
+static rs_motor_status_t rs_motor_csp_position_control_impl(
+    rs_motor_t *motor,
+    uint8_t write_current_limit,
+    float current_limit_a,
+    float speed_limit_rad_s,
+    float position_rad)
 {
     rs_motor_status_t status = rs_motor_require_initialized(motor);
+    uint8_t mode_changed;
+    uint8_t limited_parameters_changed;
 
     if (status != RS_MOTOR_STATUS_OK) {
         return status;
@@ -570,6 +575,30 @@ rs_motor_status_t rs_motor_csp_position_control(rs_motor_t *motor,
     if (rs_motor_is_finite(speed_limit_rad_s) == 0U ||
         rs_motor_is_finite(position_rad) == 0U) {
         return RS_MOTOR_STATUS_INVALID_ARGUMENT;
+    }
+    if (write_current_limit != 0U &&
+        (rs_motor_is_finite(current_limit_a) == 0U ||
+         current_limit_a <= 0.0f ||
+         speed_limit_rad_s <= 0.0f)) {
+        return RS_MOTOR_STATUS_INVALID_ARGUMENT;
+    }
+
+    /*
+     * 电机掉电重启后会恢复默认模式，但 MCU 的发送状态仍在 RAM 中。
+     * 限流 CSP 在确认离线后主动丢弃本地模式/参数缓存，恢复通信时重新配置。
+     */
+    if (write_current_limit != 0U &&
+        motor->state.feedback_count != 0U &&
+        motor->state.online == 0U) {
+        status = rs_motor_send_disable(motor);
+        if (status != RS_MOTOR_STATUS_OK) {
+            return status;
+        }
+        motor->state.enabled = 0U;
+        motor->state.control_mode = RS_MOTOR_CONTROL_MODE_NONE;
+        motor->internal.mode_applied = 0U;
+        motor->internal.applied_control_mode = RS_MOTOR_CONTROL_MODE_NONE;
+        motor->internal.csp_limited_parameters_applied = 0U;
     }
 
     speed_limit_rad_s = rs_motor_clamp(speed_limit_rad_s,
@@ -579,6 +608,14 @@ rs_motor_status_t rs_motor_csp_position_control(rs_motor_t *motor,
                                   motor->internal.position_min,
                                   motor->internal.position_max);
 
+    mode_changed = (motor->internal.mode_applied == 0U ||
+                    motor->internal.applied_control_mode !=
+                        RS_MOTOR_CONTROL_MODE_CSP_POSITION) ? 1U : 0U;
+    limited_parameters_changed =
+        (motor->internal.csp_limited_parameters_applied == 0U ||
+         motor->internal.csp_current_limit_a != current_limit_a ||
+         motor->internal.csp_speed_limit_rad_s != speed_limit_rad_s) ? 1U : 0U;
+
     status = rs_motor_apply_mode(motor, RS_MOTOR_CONTROL_MODE_CSP_POSITION);
     if (status != RS_MOTOR_STATUS_OK) {
         if (motor->state.enabled == 0U) {
@@ -587,11 +624,57 @@ rs_motor_status_t rs_motor_csp_position_control(rs_motor_t *motor,
         return status;
     }
     rs_motor_cancel_multi_turn(motor);
-    status = rs_motor_write_float(motor, RS_PARAM_CSP_SPEED_LIMIT, speed_limit_rad_s);
-    if (status != RS_MOTOR_STATUS_OK) {
-        return status;
+    if (write_current_limit != 0U &&
+        (mode_changed != 0U || limited_parameters_changed != 0U)) {
+        status = rs_motor_write_float(motor,
+                                      RS_PARAM_CURRENT_LIMIT,
+                                      current_limit_a);
+        if (status != RS_MOTOR_STATUS_OK) {
+            return status;
+        }
+        status = rs_motor_write_float(motor,
+                                      RS_PARAM_CSP_SPEED_LIMIT,
+                                      speed_limit_rad_s);
+        if (status != RS_MOTOR_STATUS_OK) {
+            return status;
+        }
+        motor->internal.csp_current_limit_a = current_limit_a;
+        motor->internal.csp_speed_limit_rad_s = speed_limit_rad_s;
+        motor->internal.csp_limited_parameters_applied = 1U;
+    } else if (write_current_limit == 0U) {
+        status = rs_motor_write_float(motor,
+                                      RS_PARAM_CSP_SPEED_LIMIT,
+                                      speed_limit_rad_s);
+        if (status != RS_MOTOR_STATUS_OK) {
+            return status;
+        }
+        motor->internal.csp_limited_parameters_applied = 0U;
     }
     return rs_motor_write_float(motor, RS_PARAM_POSITION_TARGET, position_rad);
+}
+
+rs_motor_status_t rs_motor_csp_position_control(rs_motor_t *motor,
+                                                float speed_limit_rad_s,
+                                                float position_rad)
+{
+    return rs_motor_csp_position_control_impl(motor,
+                                              0U,
+                                              0.0f,
+                                              speed_limit_rad_s,
+                                              position_rad);
+}
+
+rs_motor_status_t rs_motor_csp_position_control_limited(
+    rs_motor_t *motor,
+    float current_limit_a,
+    float speed_limit_rad_s,
+    float position_rad)
+{
+    return rs_motor_csp_position_control_impl(motor,
+                                              1U,
+                                              current_limit_a,
+                                              speed_limit_rad_s,
+                                              position_rad);
 }
 
 rs_motor_status_t rs_motor_speed_control(rs_motor_t *motor,

@@ -138,11 +138,11 @@ int main(void)
   /* USER CODE BEGIN 2 */
   ChassisApp_Init();
   LiftApp_Init();
-  //KfsLiftApp_Init();
-  // GripperApp_Init();
+  KfsLiftApp_Init();
+  GripperApp_Init();
   KfsRotateApp_Init();
   KfsGripApp_Init();
-  // WeaponRotateApp_Init();
+  WeaponRotateApp_Init();
   bsp_can_init();
   CommApp_Init();
   WeaponGripApp_Init();
@@ -164,11 +164,11 @@ int main(void)
     RcControl_RunPeriodic();
     ChassisApp_RunPeriodic();
     LiftApp_RunPeriodic();
-    //KfsLiftApp_RunPeriodic();
-    // GripperApp_RunPeriodic();
+    KfsLiftApp_RunPeriodic();
+    GripperApp_RunPeriodic();
     KfsRotateApp_RunPeriodic();
     KfsGripApp_RunPeriodic();
-    // WeaponRotateApp_RunPeriodic();
+    WeaponRotateApp_RunPeriodic();
     WeaponGripApp_RunPeriodic();
 
     /* TOF200C: 限速 20ms 处理一次，传感器仅 ~5 Hz 出数。移到 LiftApp 之后

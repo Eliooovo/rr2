@@ -1,10 +1,10 @@
 /**
  * @file    kfs_grip_app.c
- * @brief   KFS 夹爪开合命令换算、RobStride MIT 控制与米制反馈。
+ * @brief   KFS 夹爪开合命令换算、RobStride 限流 CSP 控制与米制反馈。
  *
  * 管理单个 RS05 夹爪电机（RS_MOTOR_TYPE_5, id=4），挂载在 FDCAN3。
  * 上位机通过 USB 协议下发目标位置（单位 m），App 内部转换为电机单圈
- * 角度 rad 后通过 MIT 阻抗控制执行，到位后持续保持。
+ * 角度 rad 后通过限流 CSP 位置控制执行，到位后持续保持。
  * 反馈为单圈角度 rad → 米制 m（依赖机械零位），不使用多圈累计。
  */
 
@@ -25,7 +25,6 @@ static uint32_t s_last_command_sequence;
 static uint32_t s_last_ctrl_ms;
 static uint8_t s_initialized;
 static uint8_t s_target_received;
-static uint8_t s_target_applied;
 
 /* ---- 辅助函数 ---- */
 
@@ -53,7 +52,6 @@ static void KfsGripApp_ClearFeedback(void)
 static void KfsGripApp_FailAndDisable(void)
 {
     KfsGripApp_ClearFeedback();
-    s_target_applied = 0U;
     (void)rs_motor_disable(&s_motor);
 }
 
@@ -110,7 +108,6 @@ static void KfsGripApp_UpdateTargetFromCommand(void)
         if (s_target_received == 0U ||
             target_rad != s_target_position_rad) {
             s_target_position_rad = target_rad;
-            s_target_applied = 0U;
         }
         s_target_received = 1U;
     }
@@ -152,12 +149,12 @@ void KfsGripApp_Init(void)
     /* 参数合法性检查（只做一次）。 */
     if (KfsGripApp_IsFiniteDouble(KFS_GRIP_APP_METERS_PER_MOTOR_RAD) == 0U ||
         KfsGripApp_IsFiniteDouble(KFS_GRIP_APP_DIRECTION) == 0U ||
-        KfsGripApp_IsFinite(KFS_GRIP_APP_KP) == 0U ||
-        KfsGripApp_IsFinite(KFS_GRIP_APP_KD) == 0U ||
+        KfsGripApp_IsFinite(KFS_GRIP_APP_CSP_CURRENT_LIMIT_A) == 0U ||
+        KfsGripApp_IsFinite(KFS_GRIP_APP_CSP_SPEED_LIMIT_RAD_S) == 0U ||
         KfsGripApp_DirectionIsValid(KFS_GRIP_APP_DIRECTION) == 0U ||
         KFS_GRIP_APP_METERS_PER_MOTOR_RAD <= 0.0 ||
-        KFS_GRIP_APP_KP <= 0.0f ||
-        KFS_GRIP_APP_KD <= 0.0f ||
+        KFS_GRIP_APP_CSP_CURRENT_LIMIT_A <= 0.0f ||
+        KFS_GRIP_APP_CSP_SPEED_LIMIT_RAD_S <= 0.0f ||
         KFS_GRIP_APP_CTRL_PERIOD_MS == 0U ||
         KFS_GRIP_APP_CTRL_PERIOD_MS >=
             KFS_GRIP_APP_OFFLINE_TIMEOUT_MS) {
@@ -182,7 +179,6 @@ void KfsGripApp_Init(void)
     s_last_command_sequence = 0U;
     s_last_ctrl_ms = 0U;
     s_target_received = 0U;
-    s_target_applied = 0U;
     s_initialized = 1U;
 }
 
@@ -206,7 +202,7 @@ void KfsGripApp_RunPeriodic(void)
     /* 1. 更新反馈到上位机邮箱。 */
     KfsGripApp_UpdateFeedback(now_ms);
 
-    /* 2. 按周期检查命令、下发 MIT 控制帧。 */
+    /* 2. 按周期检查命令、下发 CSP 位置目标。 */
     if ((uint32_t)(now_ms - s_last_ctrl_ms) <
         KFS_GRIP_APP_CTRL_PERIOD_MS) {
         return;
@@ -223,26 +219,19 @@ void KfsGripApp_RunPeriodic(void)
         return;
     }
 
-    /* 目标已下发且驱动已记录使能 → 跳过，减少 CAN 总线负载。 */
-    if (s_target_applied != 0U &&
-        s_motor.state.enabled != 0U) {
-        return;
-    }
-
     /*
-     * MIT 阻抗控制：
-     *   torque=0（零前馈），position=目标角度，speed=0，
-     *   电机以 Kp/Kd 刚度-阻尼特性平滑移动到目标位置并保持。
+     * CSP 限流位置控制：
+     *   电机以受限速度移动到目标角度；被物体阻挡后，位置环输出受
+     *   current_limit 限制，从而以可控夹持力持续保持。
+     * 电流/速度只在首次配置、参数变化或离线恢复时写入；正常周期只
+     * 重发位置目标，作为 CAN keepalive 并刷新电机 Type 2 反馈。
      */
-    if (rs_motor_motion_control(
+    if (rs_motor_csp_position_control_limited(
             &s_motor,
-            0.0f,                   /* torque_nm — 零前馈 */
-            s_target_position_rad,  /* position  */
-            0.0f,                   /* speed     — 目标速度为零 */
-            KFS_GRIP_APP_KP,        /* kp        — 位置刚度 */
-            KFS_GRIP_APP_KD) != RS_MOTOR_OK) { /* kd — 速度阻尼 */
+            KFS_GRIP_APP_CSP_CURRENT_LIMIT_A,
+            KFS_GRIP_APP_CSP_SPEED_LIMIT_RAD_S,
+            s_target_position_rad) != RS_MOTOR_OK) {
         KfsGripApp_FailAndDisable();
         return;
     }
-    s_target_applied = 1U;
 }
