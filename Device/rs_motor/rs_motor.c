@@ -20,6 +20,17 @@
 #define RS_PARAM_PP_SPEED             0x7024U
 #define RS_PARAM_PP_ACCELERATION      0x7025U
 
+ /* PID 与滤波参数（位置/速度/电流环，阻尼开关）。 */                                                                                                                      
+#define RS_PARAM_CUR_KP              0x7010U                                                                                                                              
+#define RS_PARAM_CUR_KI              0x7011U                                                                                                                              
+#define RS_PARAM_CUR_FILT_GAIN       0x7014U                                                                                                                              
+#define RS_PARAM_LOC_KP              0x701EU                                                                                                                              
+#define RS_PARAM_SPD_KP              0x701FU                                                                                                                              
+#define RS_PARAM_SPD_KI              0x7020U                                                                                                                              
+#define RS_PARAM_SPD_FILT_GAIN       0x7021U                                                                                                                              
+#define RS_PARAM_DAMPER              0x702AU                                                                                                                              
+                                                        
+
 #define RS_EXT_ID_MAX                 0x1FFFFFFFU
 #define RS_EXT_ID_TYPE_SHIFT          24U
 #define RS_EXT_ID_DATA_SHIFT          8U
@@ -246,6 +257,21 @@ static rs_motor_status_t rs_motor_write_float(rs_motor_t *motor,
                          RS_COMM_TYPE_PARAMETER_WRITE,
                          motor->config.master_id,
                          data);
+}
+
+rs_motor_status_t rs_motor_write_parameter(rs_motor_t *motor,
+                                           uint16_t index,
+                                           float value)
+{
+    rs_motor_status_t status = rs_motor_require_initialized(motor);
+
+    if (status != RS_MOTOR_STATUS_OK) {
+        return status;
+    }
+    if (rs_motor_is_finite(value) == 0U) {
+        return RS_MOTOR_STATUS_INVALID_ARGUMENT;
+    }
+    return rs_motor_write_float(motor, index, value);
 }
 
 static rs_motor_status_t rs_motor_apply_mode(rs_motor_t *motor,

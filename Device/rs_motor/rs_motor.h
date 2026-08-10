@@ -9,6 +9,16 @@ extern "C" {
 
 #include "fdcan.h"
 
+/** RobStride 参数地址，用于 rs_motor_write_parameter() 的 index 参数。 */
+#define RS_PARAM_CUR_KP              0x7010U  /**< 电流环 Kp          */
+#define RS_PARAM_CUR_KI              0x7011U  /**< 电流环 Ki          */
+#define RS_PARAM_CUR_FILT_GAIN       0x7014U  /**< 电流滤波系数        */
+#define RS_PARAM_LOC_KP              0x701EU  /**< 位置环 Kp (CSP核心) */
+#define RS_PARAM_SPD_KP              0x701FU  /**< 速度环 Kp          */
+#define RS_PARAM_SPD_KI              0x7020U  /**< 速度环 Ki          */
+#define RS_PARAM_SPD_FILT_GAIN       0x7021U  /**< 速度滤波系数        */
+#define RS_PARAM_DAMPER              0x702AU  /**< 阻尼开关 (uint8)   */
+
 /** RobStride 私有协议支持的电机参数表编号。 */
 typedef enum {
     RS_MOTOR_TYPE_0 = 0,
@@ -202,6 +212,11 @@ rs_motor_status_t rs_motor_speed_control(rs_motor_t *motor,
                                          float speed_rad_s);
 
 rs_motor_status_t rs_motor_current_control(rs_motor_t *motor, float current_a);
+
+/** 向电机写入一个 float 参数（通信类型 0x12），index 使用 RS_PARAM_* 宏。 */
+rs_motor_status_t rs_motor_write_parameter(rs_motor_t *motor,
+                                           uint16_t index,
+                                           float value);
 
 /**
  * MCU 侧连续多圈位置控制：速度限制、加速度、连续位置目标。

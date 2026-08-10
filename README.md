@@ -147,6 +147,130 @@ as `0.01242 m/rad`, and
 corresponds to `0.01242 / 19 m`. Commands and feedback are converted internally
 with `double`; the USB protocol remains `float32`.
 
+## RS 电机 PID 参数
+
+FDCAN3 上挂载的 RobStride RS 系列电机，通过 `rs_motor_write_parameter()` 可在线读写
+内部 PID 寄存器。以下列出三款在用电机型号的全部 PID 相关初始值。
+
+### 电机型号速查
+
+| 型号 | TYPE | 关节 | motor_id | 速度范围 rad/s | 扭矩范围 Nm | MIT kp 范围 | MIT kd 范围 |
+|------|------|------|----------|---------------|------------|------------|------------|
+| RS00 | 0 | KFS 末端旋转 | 3 | -33 ~ 33 | -14 ~ 14 | 0 ~ 500 | 0 ~ 5 |
+| RS03 | 3 | KFS 根部旋转 | 2 | -20 ~ 20 | -60 ~ 60 | 0 ~ 5000 | 0 ~ 100 |
+| RS05 | 5 | 武器旋转 / 夹爪 | 4, 5 | -50 ~ 50 | -5.5 ~ 5.5 | 0 ~ 500 | 0 ~ 5 |
+
+### 出厂默认 PID 值（0x70XX 参数组）
+
+以下参数通过通信类型 0x12（参数写入）读写，所有 float 均为 IEEE 754 小端。
+
+|   地址      |      名称      |  类型 | RS00 默认| RS03 默认| RS05 默认|   说明   |
+|------------|---------------|-------|---------|---------|--------|------|
+| 0x7010     | cur_kp        | float |  0.17   |  0.17   | 0.17   | 电流环比例增益 |
+| 0x7011     | cur_ki        | float |  0.012  |  0.012  | 0.012  | 电流环积分增益 |
+| 0x7014     | cur_filt_gain | float |  —      |  —      | —      | 电流滤波系数 |
+| **0x701E** |  **loc_kp**   | float |  **40** |  **60** | **40** | **位置环比例增益 (CSP 核心)** |
+| 0x701F     | spd_kp        | float |  6      |  6      | 6      | 速度环比例增益 |
+| 0x7020     | spd_ki        | float |  0.02   |  0.02   | 0.02   | 速度环积分增益 |
+| 0x7021     | spd_filt_gain | float |  0.1    |  0.1    | 0.1    | 速度滤波系数 |
+| 0x702A     | damper        | uint8 |  0      |  0      | 0      | 阻尼开关，0=关 1=开 |
+
+### 出厂默认 PID 值（0x20XX 参数组）
+
+旧版参数库，与 0x70XX 功能重叠。当前代码统一使用 0x70XX 组，此表仅供对照。
+
+| 地址 | 名称 | 类型 | RS00 默认 | RS03 默认 | RS05 默认 | 说明 |
+|------|------|------|----------|----------|----------|------|
+| 0x2011 | cur_filt_gain | float | 0.9 | 0.9 | 0.9 | 电流滤波系数 |
+| 0x2012 | cur_kp | float | 0.025 | 0.025 | 0.025 | 电流环 Kp |
+| 0x2013 | cur_ki | float | 0.0258 | 0.0258 | 0.0258 | 电流环 Ki |
+| 0x2014 | spd_kp | float | 2 | 2 | 2 | 速度环 Kp |
+| 0x2015 | spd_ki | float | 0.021 | 0.021 | 0.021 | 速度环 Ki |
+| 0x2016 | loc_kp | float | 30 | 30 | 30 | 位置环 Kp |
+| 0x2017 | spd_filt_gain | float | 0.1 | 0.1 | 0.1 | 速度滤波系数 |
+| 0x2026 | damper | uint8 | 0 | 0 | 0 | 阻尼开关 |
+
+### 控制架构
+
+```
+上位机目标角度 (loc_ref, 0x7016)
+        │
+        ▼
+  位置环 (loc_kp, 0x701E)     ← 误差 → 速度指令
+        │
+        ▼
+  速度环 (spd_kp 0x701F       ← 误差 → 电流指令
+         + spd_ki 0x7020)
+        │
+        ▼
+  电流环 (cur_kp 0x7010       ← 误差 → PWM 输出
+         + cur_ki 0x7011)
+        │
+        ▼
+      电机
+```
+
+CSP 模式（run_mode=5）下，MCU 只需下发 `loc_ref` 和 `limit_spd`，上述三级 PID
+全部在电机内部运行。
+
+### 常见症状与调参方向
+
+| 症状 | 原因 | 调法 |
+|------|------|------|
+| 能推动但回弹（刚度不够） | loc_kp 太小 | ↑ loc_kp，每次 +20~30 |
+| 到位后来回振荡 | loc_kp 过大或 spd_kp 过大 | ↓ loc_kp，↓ spd_kp |
+| 恒定外力下偏位 | spd_ki 太小（静差） | ↑ spd_ki |
+| 到位后停不稳、抖动 | spd_kp 或 spd_ki 过大 | ↓ spd_kp，↓ spd_ki |
+| 到位慢、反应迟钝 | loc_kp 太小 或 limit_spd 太小 | ↑ loc_kp，↑ limit_spd |
+
+### 当前代码中的 PID 覆盖值
+
+`App/kfs_rotate_app.c` 中两个旋转关节初始化后写入了以下值，覆盖出厂默认。
+
+**RS03 根部（2x 出厂）：**
+
+```c
+rs_motor_write_parameter(&s_root.motor, RS_PARAM_LOC_KP,  120.0f);  // 默认 60
+rs_motor_write_parameter(&s_root.motor, RS_PARAM_SPD_KP,  12.0f);   // 默认 6
+rs_motor_write_parameter(&s_root.motor, RS_PARAM_SPD_KI,  0.05f);   // 默认 0.02
+```
+
+**RS00 末端（2.5x 出厂）：**
+
+```c
+rs_motor_write_parameter(&s_tip.motor, RS_PARAM_LOC_KP,  100.0f);  // 默认 40
+rs_motor_write_parameter(&s_tip.motor, RS_PARAM_SPD_KP,  15.0f);   // 默认 6
+rs_motor_write_parameter(&s_tip.motor, RS_PARAM_SPD_KI,  0.08f);   // 默认 0.02
+```
+
+> **kp/kd 匹配原则**：增大 loc_kp 时必须同比增大 spd_kp，保持出厂比例。
+> RS03 比例 = 60/6 = 10:1，RS00 比例 = 40/6 ≈ 6.67:1。
+> 偏离出厂比例会导致欠阻尼振荡（spd_kp 相对太小）或过阻尼迟钝（spd_kp 相对太大）。
+
+武器旋转（RS05）当前使用出厂默认值，如需覆盖参照同样写法。
+
+### 运行时调参
+
+`rs_motor_write_parameter()` 可在电机在线时热调，无需先停机关闭：
+
+```c
+#include "rs_motor.h"
+
+/* 提高 RS00 位置保持刚度 */
+rs_motor_write_parameter(&s_tip.motor, RS_PARAM_LOC_KP, 120.0f);
+
+/* 读取当前反馈确认效果 */
+rs_motor_feedback_t fb;
+rs_motor_get_feedback(&s_tip.motor, &fb);
+/* fb.angle_rad  — 当前位置 */
+/* fb.speed_rad_s — 当前速度 */
+/* fb.torque_nm   — 当前扭矩 */
+```
+
+> **注意**：`RS_PARAM_DAMPER` 为 uint8 类型，当前 `rs_motor_write_parameter()` 只支持
+> float 参数，写入 damper 需用其他方式（或先用厂商上位机设定）。其余七个
+> `RS_PARAM_*` 均为 float，可直接使用。
+
 ## DJI motor objects and groups
 
 Each C620 is represented by one caller-allocated `dji_motor_t`. A

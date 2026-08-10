@@ -236,6 +236,15 @@ void KfsRotateApp_Init(void)
         &g_comm_app_feedback.kfs_tip_rotate_rad,
         &g_comm_app_feedback.kfs_tip_rotate_valid);
 
+    /*
+     * RS03（根部）CSP 位置环 PID。
+     * 出厂默认 loc_kp=60, spd_kp=6, spd_ki=0.02，
+     * 同比 2x 放大，保持出厂 10:1 的 loc_kp/spd_kp 比例。
+     */
+    rs_motor_write_parameter(&s_root.motor, RS_PARAM_LOC_KP,  120.0f);
+    rs_motor_write_parameter(&s_root.motor, RS_PARAM_SPD_KP,  12.0f);
+    rs_motor_write_parameter(&s_root.motor, RS_PARAM_SPD_KI,  0.05f);
+
     s_initialized = 1U;
 }
 
