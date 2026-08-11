@@ -38,6 +38,7 @@
 #include "weapon_grip_app.h"
 #include "tof200c_app.h"
 #include "rc_control.h"
+#include "SEGGER_RTT.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -104,6 +105,9 @@ int main(void)
   SystemClock_Config();
 
   /* USER CODE BEGIN SysInit */
+
+  SEGGER_RTT_Init();
+  SEGGER_RTT_WriteString(0, "[rr2] RTT ready\r\n");
 
   /* USER CODE END SysInit */
 

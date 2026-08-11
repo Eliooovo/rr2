@@ -52,6 +52,8 @@ add_executable(${CMAKE_PROJECT_NAME}
     robotic_arm/SCSLib/SMS_STS.h
     robotic_arm/SCSLib/INST.h
     Modules/comm_protocol.h
+    Modules/segger_rtt/SEGGER_RTT.c
+    Modules/segger_rtt/SEGGER_RTT_printf.c
     Device/tof200c/tof200c.c
     Device/tof200c/tof200c.h
     Device/tof200c/vl53l0x_platform.c
@@ -78,11 +80,20 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     Device/rs_motor
     robotic_arm/SCSLib
     Modules
+    Modules/segger_rtt
     Device/tof200c
     ThirdParty/ST/VL53L0X/core/inc
 )
 
 target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
+)
+
+target_link_options(${CMAKE_PROJECT_NAME} PRIVATE
+    "-T${CMAKE_CURRENT_SOURCE_DIR}/Modules/segger_rtt/segger_rtt.ld"
+)
+
+set_property(TARGET ${CMAKE_PROJECT_NAME} APPEND PROPERTY LINK_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/Modules/segger_rtt/segger_rtt.ld"
 )
 
 list(REMOVE_ITEM CMAKE_C_IMPLICIT_LINK_LIBRARIES ob)
