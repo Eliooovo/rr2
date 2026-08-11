@@ -136,6 +136,7 @@ int main(void)
   MX_UART7_Init();
   MX_I2C2_Init();
   /* USER CODE BEGIN 2 */
+  bsp_can_init();
   ChassisApp_Init();
   LiftApp_Init();
   KfsLiftApp_Init();
@@ -143,7 +144,6 @@ int main(void)
   KfsRotateApp_Init();
   KfsGripApp_Init();
   WeaponRotateApp_Init();
-  bsp_can_init();
   CommApp_Init();
   WeaponGripApp_Init();
   g_tof200c_init_status = tof200c_init(&g_tof200c);
@@ -158,8 +158,8 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
 
-    HAL_GPIO_TogglePin(LED2_GPIO_Port, LED2_Pin);  // 翻转 LED2
-    HAL_Delay(500);  // 等 500ms
+    // HAL_GPIO_TogglePin(LED2_GPIO_Port, LED2_Pin);  // 翻转 LED2
+    // HAL_Delay(500);  // 等 500ms
     tof200c_feedback_t latest;
     static uint32_t s_last_tof_ms = 0;
 
