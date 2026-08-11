@@ -157,6 +157,9 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+
+    HAL_GPIO_TogglePin(LED2_GPIO_Port, LED2_Pin);  // 翻转 LED2
+    HAL_Delay(500);  // 等 500ms
     tof200c_feedback_t latest;
     static uint32_t s_last_tof_ms = 0;
 

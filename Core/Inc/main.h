@@ -61,6 +61,8 @@ void Error_Handler(void);
 #define RC_RX_GPIO_Port GPIOE
 #define RC_TX_Pin GPIO_PIN_3
 #define RC_TX_GPIO_Port GPIOE
+#define LED2_Pin GPIO_PIN_13
+#define LED2_GPIO_Port GPIOC
 #define TOF_XSHUT_Pin GPIO_PIN_5
 #define TOF_XSHUT_GPIO_Port GPIOA
 #define TOF_INT_Pin GPIO_PIN_10
