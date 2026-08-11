@@ -36,6 +36,8 @@ add_executable(${CMAKE_PROJECT_NAME}
     App/lift_app.h
     App/rc_control.c
     App/rc_control.h
+    App/tof200c_app.c
+    App/tof200c_app.h
     Device/dji_motor.c
     Device/dji_motor.h
     Device/dji_motor_group.c

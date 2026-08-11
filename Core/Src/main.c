@@ -36,7 +36,7 @@
 #include "lift_app.h"
 #include "weapon_rotate_app.h"
 #include "weapon_grip_app.h"
-#include "tof200c.h"
+#include "tof200c_app.h"
 #include "rc_control.h"
 /* USER CODE END Includes */
 
@@ -58,25 +58,7 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
-tof200c_t g_tof200c = {
-  .config = {
-    .hi2c = &hi2c2,
-    .xshut_port = TOF_XSHUT_GPIO_Port,
-    .xshut_pin = TOF_XSHUT_Pin,
-    .int_port = TOF_INT_GPIO_Port,
-    .int_pin = TOF_INT_Pin,
-    .i2c_address_7bit = TOF200C_DEFAULT_I2C_ADDRESS_7BIT,
-    .profile = TOF200C_PROFILE_HIGH_ACCURACY,
-    .stale_timeout_ms = 100U,
-  },
-};
 
-volatile tof200c_status_t g_tof200c_init_status =
-    TOF200C_STATUS_NOT_INITIALIZED;
-volatile tof200c_status_t g_tof200c_read_status =
-    TOF200C_STATUS_NOT_INITIALIZED;
-volatile tof200c_feedback_t g_tof200c_latest;
- 
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -146,7 +128,7 @@ int main(void)
   WeaponRotateApp_Init();
   CommApp_Init();
   WeaponGripApp_Init();
-  g_tof200c_init_status = tof200c_init(&g_tof200c);
+  Tof200cApp_Init();
   RcControl_Init();
   /* USER CODE END 2 */
 
@@ -160,8 +142,6 @@ int main(void)
 
     // HAL_GPIO_TogglePin(LED2_GPIO_Port, LED2_Pin);  // 翻转 LED2
     // HAL_Delay(500);  // 等 500ms
-    tof200c_feedback_t latest;
-    static uint32_t s_last_tof_ms = 0;
 
     CommApp_RunPeriodic();
     RcControl_RunPeriodic();
@@ -173,22 +153,7 @@ int main(void)
     KfsGripApp_RunPeriodic();
     WeaponRotateApp_RunPeriodic();
     WeaponGripApp_RunPeriodic();
-
-    /* TOF200C: 限速 20ms 处理一次，传感器仅 ~5 Hz 出数。移到 LiftApp 之后
-       避免阻塞恢复时影响抬升/底盘 PID 时序。 */
-    {
-      uint32_t now = HAL_GetTick();
-      if ((uint32_t)(now - s_last_tof_ms) >= 20U) {
-        tof200c_process(&g_tof200c);
-        s_last_tof_ms = now;
-      }
-    }
-    g_tof200c_read_status = tof200c_get_latest(&g_tof200c, &latest);
-    if ((g_tof200c_read_status == TOF200C_STATUS_OK) ||
-        (g_tof200c_read_status == TOF200C_STATUS_STALE_DATA))
-    {
-      g_tof200c_latest = latest;
-    }
+    Tof200cApp_RunPeriodic();
      
   }
   /* USER CODE END 3 */
@@ -255,22 +220,22 @@ void SystemClock_Config(void)
 /* USER CODE BEGIN 4 */
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
-  tof200c_on_exti_callback(&g_tof200c, GPIO_Pin);
+  Tof200cApp_OnExtiCallback(GPIO_Pin);
 }
 
 void HAL_I2C_MemRxCpltCallback(I2C_HandleTypeDef *hi2c)
 {
-  tof200c_on_i2c_mem_rx_complete(&g_tof200c, hi2c);
+  Tof200cApp_OnI2cMemRxComplete(hi2c);
 }
 
 void HAL_I2C_MemTxCpltCallback(I2C_HandleTypeDef *hi2c)
 {
-  tof200c_on_i2c_mem_tx_complete(&g_tof200c, hi2c);
+  Tof200cApp_OnI2cMemTxComplete(hi2c);
 }
 
 void HAL_I2C_ErrorCallback(I2C_HandleTypeDef *hi2c)
 {
-  tof200c_on_i2c_error(&g_tof200c, hi2c);
+  Tof200cApp_OnI2cError(hi2c);
 }
 
 /* USER CODE END 4 */
