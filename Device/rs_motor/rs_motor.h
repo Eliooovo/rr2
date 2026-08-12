@@ -13,6 +13,7 @@ extern "C" {
 #define RS_PARAM_CUR_KP              0x7010U  /**< 电流环 Kp          */
 #define RS_PARAM_CUR_KI              0x7011U  /**< 电流环 Ki          */
 #define RS_PARAM_CUR_FILT_GAIN       0x7014U  /**< 电流滤波系数        */
+#define RS_PARAM_CURRENT_LIMIT       0x7018U  /**< 速度/位置模式电流限制 */
 #define RS_PARAM_LOC_KP              0x701EU  /**< 位置环 Kp (CSP核心) */
 #define RS_PARAM_SPD_KP              0x701FU  /**< 速度环 Kp          */
 #define RS_PARAM_SPD_KI              0x7020U  /**< 速度环 Ki          */
@@ -192,6 +193,14 @@ rs_motor_status_t rs_motor_pp_position_control(rs_motor_t *motor,
                                                float speed_rad_s,
                                                float acceleration_rad_s2,
                                                float position_rad);
+
+/** PP 模式：电流限制、目标速度、加速度、目标位置。 */
+rs_motor_status_t rs_motor_pp_position_control_limited(
+    rs_motor_t *motor,
+    float current_limit_a,
+    float speed_rad_s,
+    float acceleration_rad_s2,
+    float position_rad);
 
 /** CSP 模式：速度限制、目标位置。 */
 rs_motor_status_t rs_motor_csp_position_control(rs_motor_t *motor,

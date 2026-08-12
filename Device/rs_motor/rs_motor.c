@@ -15,7 +15,6 @@
 #define RS_PARAM_SPEED_TARGET         0x700AU
 #define RS_PARAM_POSITION_TARGET      0x7016U
 #define RS_PARAM_CSP_SPEED_LIMIT      0x7017U
-#define RS_PARAM_CURRENT_LIMIT        0x7018U
 #define RS_PARAM_SPEED_ACCELERATION   0x7022U
 #define RS_PARAM_PP_SPEED             0x7024U
 #define RS_PARAM_PP_ACCELERATION      0x7025U
@@ -542,17 +541,23 @@ rs_motor_status_t rs_motor_motion_control(rs_motor_t *motor,
     return rs_motor_send(motor, RS_COMM_TYPE_MOTION_CONTROL, torque_raw, data);
 }
 
-rs_motor_status_t rs_motor_pp_position_control(rs_motor_t *motor,
-                                               float speed_rad_s,
-                                               float acceleration_rad_s2,
-                                               float position_rad)
+static rs_motor_status_t rs_motor_pp_position_control_impl(
+    rs_motor_t *motor,
+    uint8_t write_current_limit,
+    float current_limit_a,
+    float speed_rad_s,
+    float acceleration_rad_s2,
+    float position_rad)
 {
     rs_motor_status_t status = rs_motor_require_initialized(motor);
 
     if (status != RS_MOTOR_STATUS_OK) {
         return status;
     }
-    if (rs_motor_is_finite(speed_rad_s) == 0U ||
+    if ((write_current_limit != 0U &&
+         (rs_motor_is_finite(current_limit_a) == 0U ||
+          current_limit_a <= 0.0f)) ||
+        rs_motor_is_finite(speed_rad_s) == 0U ||
         rs_motor_is_finite(acceleration_rad_s2) == 0U ||
         rs_motor_is_finite(position_rad) == 0U) {
         return RS_MOTOR_STATUS_INVALID_ARGUMENT;
@@ -581,7 +586,43 @@ rs_motor_status_t rs_motor_pp_position_control(rs_motor_t *motor,
     if (status != RS_MOTOR_STATUS_OK) {
         return status;
     }
+    if (write_current_limit != 0U) {
+        status = rs_motor_write_float(motor,
+                                      RS_PARAM_CURRENT_LIMIT,
+                                      current_limit_a);
+        if (status != RS_MOTOR_STATUS_OK) {
+            return status;
+        }
+    }
     return rs_motor_write_float(motor, RS_PARAM_POSITION_TARGET, position_rad);
+}
+
+rs_motor_status_t rs_motor_pp_position_control(rs_motor_t *motor,
+                                               float speed_rad_s,
+                                               float acceleration_rad_s2,
+                                               float position_rad)
+{
+    return rs_motor_pp_position_control_impl(motor,
+                                             0U,
+                                             0.0f,
+                                             speed_rad_s,
+                                             acceleration_rad_s2,
+                                             position_rad);
+}
+
+rs_motor_status_t rs_motor_pp_position_control_limited(
+    rs_motor_t *motor,
+    float current_limit_a,
+    float speed_rad_s,
+    float acceleration_rad_s2,
+    float position_rad)
+{
+    return rs_motor_pp_position_control_impl(motor,
+                                             1U,
+                                             current_limit_a,
+                                             speed_rad_s,
+                                             acceleration_rad_s2,
+                                             position_rad);
 }
 
 static rs_motor_status_t rs_motor_csp_position_control_impl(

@@ -1,6 +1,6 @@
 /**
  * @file    kfs_rotate_app.c
- * @brief   KFS 旋转关节 CSP 位置控制（限速 ~45°/s）。
+ * @brief   KFS 旋转关节位置控制（根部 PP，末端 CSP，限速 ~45°/s）。
  *
  * 管理两个旋转关节：根部（RS03, id=2）和末端（RS00, id=3）。
  * 上位机通过 USB 协议下发目标角度（单位 rad），App 在收到首个有效命令
@@ -30,9 +30,10 @@ typedef struct {
     /* 运行时状态 */
     float    target_position_rad;         /* 当前目标位置 */
     uint8_t  target_received;             /* 是否收到过有效命令 */
-    uint8_t  target_applied;              /* 目标是否已下发到电机 */
+    uint8_t  use_pp;                      /* 1: PP，0: CSP */
     uint32_t last_command_sequence;       /* 上次处理的命令序列号 */
-    uint32_t last_ctrl_ms;                /* 上次下发 CSP 的时间戳 */
+    uint32_t last_ctrl_ms;                /* 上次检查位置命令的时间戳 */
+    volatile rs_motor_status_t last_control_status; /* 保留最后一次控制返回值 */
 } kfs_rotate_joint_t;
 
 /* ---- 关节实例 ---- */
@@ -40,6 +41,9 @@ typedef struct {
 static kfs_rotate_joint_t s_root;
 static kfs_rotate_joint_t s_tip;
 static uint8_t s_initialized;
+static volatile rs_motor_status_t s_root_loc_kp_write_status;
+static volatile rs_motor_status_t s_root_spd_kp_write_status;
+static volatile rs_motor_status_t s_root_spd_ki_write_status;
 
 /* ---- 辅助函数 ---- */
 
@@ -57,7 +61,6 @@ static void KfsRotateJoint_ClearFeedback(kfs_rotate_joint_t *joint)
 static void KfsRotateJoint_FailAndDisable(kfs_rotate_joint_t *joint)
 {
     KfsRotateJoint_ClearFeedback(joint);
-    joint->target_applied = 0U;
     (void)rs_motor_disable(&joint->motor);
 }
 
@@ -90,7 +93,6 @@ static void KfsRotateJoint_UpdateTarget(kfs_rotate_joint_t *joint)
     if (joint->target_received == 0U ||
         target_rad != joint->target_position_rad) {
         joint->target_position_rad = target_rad;
-        joint->target_applied = 0U;
     }
     joint->target_received = 1U;
 }
@@ -120,6 +122,8 @@ static void KfsRotateJoint_UpdateFeedback(kfs_rotate_joint_t *joint,
 static void KfsRotateJoint_RunPeriodic(kfs_rotate_joint_t *joint,
                                        uint32_t now_ms)
 {
+    rs_motor_status_t status;
+
     /* 离线判断由驱动按反馈时间戳处理，不能按主循环次数判断。 */
     if (rs_motor_update(&joint->motor, now_ms) != RS_MOTOR_OK) {
         KfsRotateJoint_FailAndDisable(joint);
@@ -129,7 +133,7 @@ static void KfsRotateJoint_RunPeriodic(kfs_rotate_joint_t *joint,
     /* 1. 更新反馈到上位机邮箱。 */
     KfsRotateJoint_UpdateFeedback(joint, now_ms);
 
-    /* 2. 按周期检查命令、下发 CSP。 */
+    /* 2. 按周期检查命令、下发位置目标。 */
     if ((uint32_t)(now_ms - joint->last_ctrl_ms) <
         KFS_ROTATE_APP_CTRL_PERIOD_MS) {
         return;
@@ -146,25 +150,28 @@ static void KfsRotateJoint_RunPeriodic(kfs_rotate_joint_t *joint,
         return;
     }
 
-    /* 目标已下发且驱动已记录使能 → 跳过，减少 CAN 总线负载。 */
-    if (joint->target_applied != 0U &&
-        joint->motor.state.enabled != 0U) {
-        return;
-    }
-
     /*
-     * CSP（Cyclic Synchronous Position）位置控制：
-     *   电机内部以不超过 speed_limit 的速度平滑移动到目标位置，
-     *   到位后自动保持。
+     * 周期重发位置目标作为 CAN keepalive。RobStride 的 Type 2
+     * 实际反馈由控制交互刷新；只在目标变化时下发会使反馈超时。
      */
-    if (rs_motor_csp_position_control(
+    if (joint->use_pp != 0U) {
+        status = rs_motor_pp_position_control_limited(
+            &joint->motor,
+            KFS_ROTATE_APP_ROOT_PP_CURRENT_LIMIT_A,
+            KFS_ROTATE_APP_MAX_SPEED_RAD_S,
+            KFS_ROTATE_APP_ROOT_PP_ACCELERATION_RAD_S2,
+            joint->target_position_rad);
+    } else {
+        status = rs_motor_csp_position_control(
             &joint->motor,
             KFS_ROTATE_APP_MAX_SPEED_RAD_S,
-            joint->target_position_rad) != RS_MOTOR_OK) {
+            joint->target_position_rad);
+    }
+    joint->last_control_status = status;
+    if (status != RS_MOTOR_OK) {
         KfsRotateJoint_FailAndDisable(joint);
         return;
     }
-    joint->target_applied = 1U;
 }
 
 /* ---- 关节初始化 ---- */
@@ -172,6 +179,7 @@ static void KfsRotateJoint_RunPeriodic(kfs_rotate_joint_t *joint,
 static void KfsRotateJoint_Init(kfs_rotate_joint_t *joint,
                                 uint8_t motor_id,
                                 rs_motor_type_t motor_type,
+                                uint8_t use_pp,
                                 const volatile float *command_rad,
                                 volatile float *feedback_rad,
                                 volatile uint8_t *feedback_valid)
@@ -179,6 +187,8 @@ static void KfsRotateJoint_Init(kfs_rotate_joint_t *joint,
     joint->command_rad = command_rad;
     joint->feedback_rad = feedback_rad;
     joint->feedback_valid = feedback_valid;
+    joint->use_pp = use_pp;
+    joint->last_control_status = RS_MOTOR_STATUS_NOT_INITIALIZED;
 
     KfsRotateJoint_ClearFeedback(joint);
 
@@ -196,7 +206,6 @@ static void KfsRotateJoint_Init(kfs_rotate_joint_t *joint,
 
     joint->target_position_rad = 0.0f;
     joint->target_received = 0U;
-    joint->target_applied = 0U;
     joint->last_command_sequence = 0U;
     joint->last_ctrl_ms = 0U;
 }
@@ -211,7 +220,11 @@ void KfsRotateApp_Init(void)
 
     /* 参数合法性检查（只做一次）。 */
     if (KfsRotateIsFinite(KFS_ROTATE_APP_MAX_SPEED_RAD_S) == 0U ||
+        KfsRotateIsFinite(KFS_ROTATE_APP_ROOT_PP_ACCELERATION_RAD_S2) == 0U ||
+        KfsRotateIsFinite(KFS_ROTATE_APP_ROOT_PP_CURRENT_LIMIT_A) == 0U ||
         KFS_ROTATE_APP_MAX_SPEED_RAD_S <= 0.0f ||
+        KFS_ROTATE_APP_ROOT_PP_ACCELERATION_RAD_S2 <= 0.0f ||
+        KFS_ROTATE_APP_ROOT_PP_CURRENT_LIMIT_A <= 0.0f ||
         KFS_ROTATE_APP_CTRL_PERIOD_MS == 0U ||
         KFS_ROTATE_APP_CTRL_PERIOD_MS >=
             KFS_ROTATE_APP_OFFLINE_TIMEOUT_MS) {
@@ -223,6 +236,7 @@ void KfsRotateApp_Init(void)
         &s_root,
         2U,
         RS_MOTOR_TYPE_3,
+        1U,
         &g_comm_app_command.kfs_root_rotate_rad,
         &g_comm_app_feedback.kfs_root_rotate_rad,
         &g_comm_app_feedback.kfs_root_rotate_valid);
@@ -232,18 +246,23 @@ void KfsRotateApp_Init(void)
         &s_tip,
         3U,
         RS_MOTOR_TYPE_0,
+        0U,
         &g_comm_app_command.kfs_tip_rotate_rad,
         &g_comm_app_feedback.kfs_tip_rotate_rad,
         &g_comm_app_feedback.kfs_tip_rotate_valid);
 
     /*
-     * RS03（根部）CSP 位置环 PID。
-     * 出厂默认 loc_kp=60, spd_kp=6, spd_ki=0.02，
-     * 同比 2x 放大，保持出厂 10:1 的 loc_kp/spd_kp 比例。
+     * RS03（根部）电机内部位置/速度环 PID（PP 模式仍使用）。
+     * 提高位置环增益以增加偏离目标时的保持阻力，
+     * 同时回调速度环比例增益，减少负载静止时对编码器
+     * 微小速度抖动的放大。
      */
-    rs_motor_write_parameter(&s_root.motor, RS_PARAM_LOC_KP,  120.0f);
-    rs_motor_write_parameter(&s_root.motor, RS_PARAM_SPD_KP,  12.0f);
-    rs_motor_write_parameter(&s_root.motor, RS_PARAM_SPD_KI,  0.05f);
+    s_root_loc_kp_write_status =
+        rs_motor_write_parameter(&s_root.motor, RS_PARAM_LOC_KP, 60.0f);
+    s_root_spd_kp_write_status =
+        rs_motor_write_parameter(&s_root.motor, RS_PARAM_SPD_KP, 6.0f);
+    s_root_spd_ki_write_status =
+        rs_motor_write_parameter(&s_root.motor, RS_PARAM_SPD_KI, 0.02f);
 
     s_initialized = 1U;
 }
