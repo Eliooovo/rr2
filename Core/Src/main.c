@@ -38,7 +38,7 @@
 #include "weapon_grip_app.h"
 #include "tof200c_app.h"
 #include "rc_control.h"
-#include "SEGGER_RTT.h"
+#include "main_loop_monitor_app/main_loop_monitor_app.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -106,9 +106,6 @@ int main(void)
 
   /* USER CODE BEGIN SysInit */
 
-  SEGGER_RTT_Init();
-  SEGGER_RTT_WriteString(0, "[rr2] RTT ready\r\n");
-
   /* USER CODE END SysInit */
 
   /* Initialize all configured peripherals */
@@ -134,6 +131,7 @@ int main(void)
   WeaponGripApp_Init();
   Tof200cApp_Init();
   RcControl_Init();
+  MainLoopMonitorApp_Init();
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -158,7 +156,8 @@ int main(void)
     WeaponRotateApp_RunPeriodic();
     WeaponGripApp_RunPeriodic();
     Tof200cApp_RunPeriodic();
-     
+
+    MainLoopMonitorApp_RunPeriodic();
   }
   /* USER CODE END 3 */
 }

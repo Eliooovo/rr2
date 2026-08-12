@@ -34,6 +34,8 @@ add_executable(${CMAKE_PROJECT_NAME}
     App/weapon_grip_app.h
     App/lift_app.c
     App/lift_app.h
+    App/main_loop_monitor_app/main_loop_monitor_app.c
+    App/main_loop_monitor_app/main_loop_monitor_app.h
     App/rc_control.c
     App/rc_control.h
     App/tof200c_app.c
