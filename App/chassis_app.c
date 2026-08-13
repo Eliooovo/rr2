@@ -6,6 +6,7 @@
 #include "chassis_app.h"
 
 #include <float.h>
+#include <math.h>
 
 #include "comm_app.h"
 #include "dji_motor.h"
@@ -14,6 +15,9 @@
 #include "main.h"
 
 #define CHASSIS_APP_PI_F 3.14159265358979323846f
+
+/* 里程计积分最大步长：调试器暂停或主循环拥塞时的 dt 上限。 */
+#define CHASSIS_APP_ODOMETRY_MAX_DT_MS 5U
 
 enum {
     CHASSIS_WHEEL_RF = 0,
@@ -37,6 +41,9 @@ static uint8_t s_group_count;
 static uint8_t s_initialized;
 static uint8_t s_control_timer_started;
 static uint32_t s_last_control_ms;
+static double s_pose_x_m;
+static double s_pose_y_m;
+static double s_pose_yaw_rad;
 
 static uint8_t ChassisApp_IsFinite(float value)
 {
@@ -164,18 +171,27 @@ static uint8_t ChassisApp_ReadWheelLinearSpeeds(
     return 1U;
 }
 
-static void ChassisApp_UpdateFeedback(uint32_t now_ms)
+static void ChassisApp_UpdateFeedback(
+    uint32_t now_ms,
+    uint32_t elapsed_ms)
 {
     float wheel_m_s[CHASSIS_MOTOR_COUNT];
     float rotation_radius_m;
     float vx_internal_m_s;
     float vy_internal_m_s;
     float wz_rad_s;
+    double yaw_start_rad;
+    double vx_world_m_s;
+    double vy_world_m_s;
+    double dt_s;
 
     if (ChassisApp_ReadWheelLinearSpeeds(now_ms, wheel_m_s) == 0U) {
         g_comm_app_feedback.chassis_vx_m_s = 0.0f;
         g_comm_app_feedback.chassis_vy_m_s = 0.0f;
         g_comm_app_feedback.chassis_wz_rad_s = 0.0f;
+        g_comm_app_feedback.chassis_x_m = 0.0f;
+        g_comm_app_feedback.chassis_y_m = 0.0f;
+        g_comm_app_feedback.chassis_yaw_rad = 0.0f;
         g_comm_app_feedback.chassis_valid = 0U;
         return;
     }
@@ -208,6 +224,28 @@ static void ChassisApp_UpdateFeedback(uint32_t now_ms)
     g_comm_app_feedback.chassis_vy_m_s =
         vy_internal_m_s * CHASSIS_APP_VY_DIRECTION;
     g_comm_app_feedback.chassis_wz_rad_s = wz_rad_s;
+
+    /*
+     * 里程计：使用方向修正后的上位机坐标系速度在底盘坐标系（开机时刻
+     * 即世界系）积分。dt 取实际周期并限制上限，防止暂停期间大步长积分。
+     * 位置使用本步起始 yaw 旋转（一阶欧拉，1 kHz 下误差可忽略）。
+     */
+    dt_s = (double)(elapsed_ms < CHASSIS_APP_ODOMETRY_MAX_DT_MS ?
+                    elapsed_ms : CHASSIS_APP_ODOMETRY_MAX_DT_MS) * 0.001;
+    yaw_start_rad = s_pose_yaw_rad;
+    s_pose_yaw_rad += (double)wz_rad_s * dt_s;
+    vx_world_m_s =
+        (double)g_comm_app_feedback.chassis_vx_m_s * cos(yaw_start_rad) -
+        (double)g_comm_app_feedback.chassis_vy_m_s * sin(yaw_start_rad);
+    vy_world_m_s =
+        (double)g_comm_app_feedback.chassis_vx_m_s * sin(yaw_start_rad) +
+        (double)g_comm_app_feedback.chassis_vy_m_s * cos(yaw_start_rad);
+    s_pose_x_m += vx_world_m_s * dt_s;
+    s_pose_y_m += vy_world_m_s * dt_s;
+
+    g_comm_app_feedback.chassis_x_m = (float)s_pose_x_m;
+    g_comm_app_feedback.chassis_y_m = (float)s_pose_y_m;
+    g_comm_app_feedback.chassis_yaw_rad = (float)s_pose_yaw_rad;
     g_comm_app_feedback.chassis_valid = 1U;
 }
 
@@ -223,6 +261,14 @@ void ChassisApp_Init(void)
     g_comm_app_feedback.chassis_vy_m_s = 0.0f;
     g_comm_app_feedback.chassis_wz_rad_s = 0.0f;
     g_comm_app_feedback.chassis_valid = 0U;
+
+    s_pose_x_m = 0.0;
+    s_pose_y_m = 0.0;
+    s_pose_yaw_rad = 0.0;
+
+    g_comm_app_feedback.chassis_x_m = 0.0f;
+    g_comm_app_feedback.chassis_y_m = 0.0f;
+    g_comm_app_feedback.chassis_yaw_rad = 0.0f;
 
     if (ChassisApp_DirectionIsValid(CHASSIS_APP_VX_DIRECTION) == 0U ||
         ChassisApp_DirectionIsValid(CHASSIS_APP_VY_DIRECTION) == 0U ||
@@ -314,5 +360,5 @@ void ChassisApp_RunPeriodic(void)
         (void)dji_motor_group_update(&s_groups[i], now_ms);
     }
 
-    ChassisApp_UpdateFeedback(now_ms);
+    ChassisApp_UpdateFeedback(now_ms, elapsed_ms);
 }

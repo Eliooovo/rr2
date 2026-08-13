@@ -55,6 +55,10 @@ typedef struct {
     float kfs_grip_position_m;
     float weapon_rotate_rad;
     float weapon_grip_position_m;
+    /* 里程计位姿：开机时刻为原点；yaw 连续累积、不归一化。 */
+    float chassis_x_m;
+    float chassis_y_m;
+    float chassis_yaw_rad;
     uint8_t chassis_valid;
     uint8_t lift_valid;
     uint8_t kfs_lift_valid;

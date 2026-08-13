@@ -10,7 +10,7 @@
 #include "main.h"
 #include "usbd_cdc_if.h"
 
-#define COMM_APP_FLOAT_COUNT   11U
+#define COMM_APP_FLOAT_COUNT   14U
 #define COMM_APP_PACKET_SIZE   (1U + COMM_APP_FLOAT_COUNT * 4U + 1U)
 #define COMM_APP_COMMAND_HEAD  0xAAU
 #define COMM_APP_COMMAND_TAIL  0x55U
@@ -148,6 +148,9 @@ static void CommApp_PackFeedback(
         fields[0] = g_comm_app_feedback.chassis_vx_m_s;
         fields[1] = g_comm_app_feedback.chassis_vy_m_s;
         fields[2] = g_comm_app_feedback.chassis_wz_rad_s;
+        fields[11] = g_comm_app_feedback.chassis_x_m;
+        fields[12] = g_comm_app_feedback.chassis_y_m;
+        fields[13] = g_comm_app_feedback.chassis_yaw_rad;
     }
     if (g_comm_app_feedback.lift_valid != 0U) {
         fields[3] = g_comm_app_feedback.lift_front_position_m;

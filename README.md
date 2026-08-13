@@ -51,10 +51,10 @@ is now only a compatibility forwarder from `Comm_OnUsbReceived()` to
 
 ## Command and feedback protocol
 
-Each frame is fixed at 46 bytes:
+Each frame is fixed at 58 bytes:
 
 ```text
-0xAA + 11 x IEEE-754 float32 little-endian + 0x55
+0xAA + 14 x IEEE-754 float32 little-endian + 0x55
 ```
 
 Field order:
@@ -64,12 +64,33 @@ Field order:
 3. chassis `wz` in rad/s
 4. front lift linear position in m
 5. rear lift linear position in m
-6. through 11. reserved
+6. kfs lift linear position in m
+7. kfs root rotation in rad
+8. kfs tip rotation in rad
+9. kfs grip position in m
+10. weapon rotation in rad
+11. weapon grip position in m
+12. chassis odometry X in m
+13. chassis odometry Y in m
+14. chassis odometry yaw in rad (continuous, unwrapped)
 
 The feedback frame uses the same order. Chassis fields are calculated from all
 four actual motor speeds; lift fields are the actual average continuous
 positions of the front and rear motor pairs. If a subsystem is not ready or
 has an offline motor, that subsystem's feedback fields are sent as zero.
+
+The odometry pose (fields 12-14) is integrated from the actual feedback
+velocities in the upper-computer coordinate frame, anchored at power-on
+(X=0, Y=0, yaw=0), and is frozen while the chassis is offline.
+
+里程计清零与复位：X/Y/yaw 仅在开机 `ChassisApp_Init` 时清零，运行期间无
+复位机制；电机离线时内部位姿冻结不清零，但帧内字段随 `chassis_valid=0`
+发 0，恢复后从冻结值继续积分。
+
+This is a breaking protocol change: command frames must also carry 14 floats
+(fields 12-14 are currently ignored by the firmware, send zeros). Host PC
+software must be updated to the 58-byte frame, otherwise command frames no
+longer parse.
 
 The latest valid command is retained indefinitely; there is currently no
 command timeout. A lift command received before a motor becomes online is
@@ -412,3 +433,7 @@ Open `rr2.ioc` in STM32CubeMX 6.17.0 when hardware configuration changes, then
 regenerate using the configured STM32Cube H7 V1.11.2 package.
 
 deg ≈ rad × 57.3
+
++X 轴（正前）：车头正前方。前进时 X 增加。
++Y 轴（正左）：车身正左方。向左横移（平移）时 Y 增加。
++Yaw（正向旋转）：逆时针旋转（即原地向左转）。左转时 Yaw 增加。
