@@ -396,8 +396,9 @@ static void RcControl_ApplyChannels(void)
     int8_t sw_state = RcControl_GetCh5State();
 
     /* ---- 底盘 ---- */
-    s_vx_m_s    = right_x * RC_MAX_VX_M_S;
-    s_vy_m_s    = right_y * RC_MAX_VY_M_S;
+    /* 与串口命令字段语义一致：前后为 vx，左右为 vy。 */
+    s_vx_m_s    = right_y * RC_MAX_VX_M_S;
+    s_vy_m_s    = -right_x * RC_MAX_VY_M_S;
     s_wz_rad_s  = -left_x * RC_MAX_WZ_RAD_S;
 
     /* ---- 升降：边沿触发离散位置步进 ---- */

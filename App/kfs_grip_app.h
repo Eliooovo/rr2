@@ -35,10 +35,10 @@ extern "C" {
  * -1.0：rad 负 = 打开方向 = 米正方向。
  */
 #define KFS_GRIP_APP_DIRECTION             (-1.0)
-/* CSP 电流上限，单位 A。约对应 0.6 N.m 电机输出力矩。 */
-#define KFS_GRIP_APP_CSP_CURRENT_LIMIT_A        0.9f
-/* CSP 速度上限，单位 rad/s；约对应 15.2 mm/s 夹爪线速度。 */
-#define KFS_GRIP_APP_CSP_SPEED_LIMIT_RAD_S      0.6f
+/* CSP 电流上限，单位 A。约对应 0.8 N.m 电机输出力矩。 */
+#define KFS_GRIP_APP_CSP_CURRENT_LIMIT_A        1.2f
+/* CSP 速度上限，单位 rad/s；约对应 20.3 mm/s 夹爪线速度。 */
+#define KFS_GRIP_APP_CSP_SPEED_LIMIT_RAD_S      1.5f
 
 void KfsGripApp_Init(void);
 void KfsGripApp_RunPeriodic(void);
