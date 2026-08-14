@@ -28,6 +28,11 @@ extern "C" {
 #define CHASSIS_APP_VY_SCALE                1.15f
 #define CHASSIS_APP_WZ_SCALE                0.9f
 
+/* 里程计位姿标定系数：补偿轮径偏差与麦轮打滑，乘在积分位移上。 */
+#define CHASSIS_APP_ODOMETRY_X_SCALE        1.042f
+#define CHASSIS_APP_ODOMETRY_Y_SCALE        0.943f
+#define CHASSIS_APP_ODOMETRY_YAW_SCALE      1.0f
+
 /* 坐标方向配置：只能使用 1.0f 或 -1.0f。 */
 #define CHASSIS_APP_VX_DIRECTION            (-1.0f)
 #define CHASSIS_APP_VY_DIRECTION            ( 1.0f)

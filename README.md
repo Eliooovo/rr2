@@ -74,14 +74,17 @@ Field order:
 13. chassis odometry Y in m
 14. chassis odometry yaw in rad (continuous, unwrapped)
 
-The feedback frame uses the same order. Chassis fields are calculated from all
-four actual motor speeds; lift fields are the actual average continuous
-positions of the front and rear motor pairs. If a subsystem is not ready or
-has an offline motor, that subsystem's feedback fields are sent as zero.
+The feedback frame uses the same order. Chassis velocity fields are calculated
+from all four actual motor speeds; lift fields are the actual average
+continuous positions of the front and rear motor pairs. If a subsystem is not
+ready or has an offline motor, that subsystem's feedback fields are sent as
+zero.
 
-The odometry pose (fields 12-14) is integrated from the actual feedback
-velocities in the upper-computer coordinate frame, anchored at power-on
-(X=0, Y=0, yaw=0), and is frozen while the chassis is offline.
+The odometry pose (fields 12-14) is integrated from per-tick deltas of each
+wheel's continuous multi-turn encoder count, converted to wheel displacement
+in meters and passed through the mecanum forward kinematics (position
+difference method, no time dependence). The pose is anchored at power-on
+(X=0, Y=0, yaw=0) and is frozen while the chassis is offline.
 
 里程计清零与复位：X/Y/yaw 仅在开机 `ChassisApp_Init` 时清零，运行期间无
 复位机制；电机离线时内部位姿冻结不清零，但帧内字段随 `chassis_valid=0`
@@ -106,6 +109,8 @@ User-adjustable chassis settings are in `App/chassis_app.h`:
 - `CHASSIS_APP_VX_DIRECTION` / `CHASSIS_APP_VY_DIRECTION`: upper-computer
   coordinate reversal, each set to `1.0f` or `-1.0f`.
 - `CHASSIS_APP_VX_SCALE` / `VY_SCALE` / `WZ_SCALE`: execution multipliers.
+- `CHASSIS_APP_ODOMETRY_X_SCALE` / `Y_SCALE` / `YAW_SCALE`: pose odometry
+  calibration multipliers applied to the integrated displacements.
 - Wheel dimensions, chassis dimensions, reduction ratio, current limit,
   offline timeout, and control period.
 

@@ -16,9 +16,6 @@
 
 #define CHASSIS_APP_PI_F 3.14159265358979323846f
 
-/* 里程计积分最大步长：调试器暂停或主循环拥塞时的 dt 上限。 */
-#define CHASSIS_APP_ODOMETRY_MAX_DT_MS 5U
-
 enum {
     CHASSIS_WHEEL_RF = 0,
     CHASSIS_WHEEL_LF,
@@ -44,6 +41,9 @@ static uint32_t s_last_control_ms;
 static double s_pose_x_m;
 static double s_pose_y_m;
 static double s_pose_yaw_rad;
+/* 里程计编码器基准：上一周期各轮多圈计数；基准建立前仅作占位。 */
+static int64_t s_prev_wheel_encoder_count[CHASSIS_MOTOR_COUNT];
+static uint8_t s_odometry_baseline_valid;
 
 static uint8_t ChassisApp_IsFinite(float value)
 {
@@ -171,21 +171,74 @@ static uint8_t ChassisApp_ReadWheelLinearSpeeds(
     return 1U;
 }
 
-static void ChassisApp_UpdateFeedback(
+/*
+ * 读取本周期各轮位移（m）。门控与速度读取一致，并额外要求多圈反馈已
+ * 建立。首个四轮全部有效的周期记录编码器基准，本周期位移记零。
+ */
+static uint8_t ChassisApp_ReadWheelDisplacements(
     uint32_t now_ms,
-    uint32_t elapsed_ms)
+    double wheel_d_m[CHASSIS_MOTOR_COUNT])
+{
+    const double meters_per_encoder_count =
+        ((double)CHASSIS_APP_PI_F *
+         (double)CHASSIS_APP_WHEEL_DIAMETER_M) /
+        ((double)DJI_MOTOR_ENCODER_RANGE *
+         (double)CHASSIS_APP_MOTOR_REDUCTION_RATIO);
+
+    for (uint8_t i = 0U; i < CHASSIS_MOTOR_COUNT; ++i) {
+        dji_motor_feedback_t feedback;
+        int64_t encoder_count;
+
+        if (s_motors[i].state.online == 0U ||
+            (uint32_t)(now_ms - s_motors[i].state.last_update_ms) >=
+                CHASSIS_APP_OFFLINE_TIMEOUT_MS ||
+            dji_motor_get_feedback(&s_motors[i], &feedback) !=
+                DJI_MOTOR_STATUS_OK ||
+            feedback.multi_turn.valid == 0U) {
+            return 0U;
+        }
+
+        encoder_count = feedback.multi_turn.encoder_count;
+        if (s_odometry_baseline_valid == 0U) {
+            /*
+             * 基准未建立：只记录当前计数作为上一时刻值，位移记零。
+             * 基准标志在四轮全部通过后统一置位，避免部分轮建基准。
+             */
+            s_prev_wheel_encoder_count[i] = encoder_count;
+            wheel_d_m[i] = 0.0;
+        } else {
+            wheel_d_m[i] =
+                (double)(encoder_count - s_prev_wheel_encoder_count[i]) *
+                meters_per_encoder_count *
+                (double)s_motor_config[i].direction;
+            s_prev_wheel_encoder_count[i] = encoder_count;
+        }
+    }
+
+    s_odometry_baseline_valid = 1U;
+    return 1U;
+}
+
+static void ChassisApp_UpdateFeedback(uint32_t now_ms)
 {
     float wheel_m_s[CHASSIS_MOTOR_COUNT];
+    double wheel_d_m[CHASSIS_MOTOR_COUNT];
     float rotation_radius_m;
     float vx_internal_m_s;
     float vy_internal_m_s;
     float wz_rad_s;
+    double dx_robot_m;
+    double dy_robot_m;
+    double dyaw_rad;
+    double dx_pose_m;
+    double dy_pose_m;
     double yaw_start_rad;
-    double vx_world_m_s;
-    double vy_world_m_s;
-    double dt_s;
+    double yaw_mid_rad;
+    double dx_world_m;
+    double dy_world_m;
 
-    if (ChassisApp_ReadWheelLinearSpeeds(now_ms, wheel_m_s) == 0U) {
+    if (ChassisApp_ReadWheelLinearSpeeds(now_ms, wheel_m_s) == 0U ||
+        ChassisApp_ReadWheelDisplacements(now_ms, wheel_d_m) == 0U) {
         g_comm_app_feedback.chassis_vx_m_s = 0.0f;
         g_comm_app_feedback.chassis_vy_m_s = 0.0f;
         g_comm_app_feedback.chassis_wz_rad_s = 0.0f;
@@ -226,22 +279,43 @@ static void ChassisApp_UpdateFeedback(
     g_comm_app_feedback.chassis_wz_rad_s = wz_rad_s;
 
     /*
-     * 里程计：使用方向修正后的上位机坐标系速度在底盘坐标系（开机时刻
-     * 即世界系）积分。dt 取实际周期并限制上限，防止暂停期间大步长积分。
-     * 位置使用本步起始 yaw 旋转（一阶欧拉，1 kHz 下误差可忽略）。
+     * 里程计：直接测量位置变化。各轮多圈编码器计数增量换算为轮位移，
+     * 经麦克纳姆正运动学得到本周期底盘系位移，按上位机坐标方向修正并
+     * 乘标定系数后，以本步中点 yaw 旋转到世界系（开机时刻底盘系）累加。
+     * 无 dt，主循环拥塞时下一周期增量自动包含期间全部位移。
      */
-    dt_s = (double)(elapsed_ms < CHASSIS_APP_ODOMETRY_MAX_DT_MS ?
-                    elapsed_ms : CHASSIS_APP_ODOMETRY_MAX_DT_MS) * 0.001;
+    dx_robot_m =
+        (wheel_d_m[CHASSIS_WHEEL_RF] +
+         wheel_d_m[CHASSIS_WHEEL_LF] +
+         wheel_d_m[CHASSIS_WHEEL_LB] +
+         wheel_d_m[CHASSIS_WHEEL_RB]) * 0.25;
+    dy_robot_m =
+        (-wheel_d_m[CHASSIS_WHEEL_RF] +
+          wheel_d_m[CHASSIS_WHEEL_LF] -
+          wheel_d_m[CHASSIS_WHEEL_LB] +
+          wheel_d_m[CHASSIS_WHEEL_RB]) * 0.25;
+    dyaw_rad =
+        (-wheel_d_m[CHASSIS_WHEEL_RF] +
+          wheel_d_m[CHASSIS_WHEEL_LF] +
+          wheel_d_m[CHASSIS_WHEEL_LB] -
+          wheel_d_m[CHASSIS_WHEEL_RB]) /
+        (4.0 * (double)rotation_radius_m);
+
+    dx_pose_m = dx_robot_m * CHASSIS_APP_VX_DIRECTION *
+                CHASSIS_APP_ODOMETRY_X_SCALE;
+    dy_pose_m = dy_robot_m * CHASSIS_APP_VY_DIRECTION *
+                CHASSIS_APP_ODOMETRY_Y_SCALE;
+    dyaw_rad *= CHASSIS_APP_ODOMETRY_YAW_SCALE;
+
     yaw_start_rad = s_pose_yaw_rad;
-    s_pose_yaw_rad += (double)wz_rad_s * dt_s;
-    vx_world_m_s =
-        (double)g_comm_app_feedback.chassis_vx_m_s * cos(yaw_start_rad) -
-        (double)g_comm_app_feedback.chassis_vy_m_s * sin(yaw_start_rad);
-    vy_world_m_s =
-        (double)g_comm_app_feedback.chassis_vx_m_s * sin(yaw_start_rad) +
-        (double)g_comm_app_feedback.chassis_vy_m_s * cos(yaw_start_rad);
-    s_pose_x_m += vx_world_m_s * dt_s;
-    s_pose_y_m += vy_world_m_s * dt_s;
+    s_pose_yaw_rad += dyaw_rad;
+    yaw_mid_rad = yaw_start_rad + 0.5 * dyaw_rad;
+    dx_world_m =
+        dx_pose_m * cos(yaw_mid_rad) - dy_pose_m * sin(yaw_mid_rad);
+    dy_world_m =
+        dx_pose_m * sin(yaw_mid_rad) + dy_pose_m * cos(yaw_mid_rad);
+    s_pose_x_m += dx_world_m;
+    s_pose_y_m += dy_world_m;
 
     g_comm_app_feedback.chassis_x_m = (float)s_pose_x_m;
     g_comm_app_feedback.chassis_y_m = (float)s_pose_y_m;
@@ -266,6 +340,12 @@ void ChassisApp_Init(void)
     s_pose_y_m = 0.0;
     s_pose_yaw_rad = 0.0;
 
+    /* 里程计编码器基准随位姿一并复位，首个有效周期重新建立。 */
+    for (uint8_t i = 0U; i < CHASSIS_MOTOR_COUNT; ++i) {
+        s_prev_wheel_encoder_count[i] = 0;
+    }
+    s_odometry_baseline_valid = 0U;
+
     g_comm_app_feedback.chassis_x_m = 0.0f;
     g_comm_app_feedback.chassis_y_m = 0.0f;
     g_comm_app_feedback.chassis_yaw_rad = 0.0f;
@@ -275,6 +355,9 @@ void ChassisApp_Init(void)
         ChassisApp_IsFinite(CHASSIS_APP_VX_SCALE) == 0U ||
         ChassisApp_IsFinite(CHASSIS_APP_VY_SCALE) == 0U ||
         ChassisApp_IsFinite(CHASSIS_APP_WZ_SCALE) == 0U ||
+        ChassisApp_IsFinite(CHASSIS_APP_ODOMETRY_X_SCALE) == 0U ||
+        ChassisApp_IsFinite(CHASSIS_APP_ODOMETRY_Y_SCALE) == 0U ||
+        ChassisApp_IsFinite(CHASSIS_APP_ODOMETRY_YAW_SCALE) == 0U ||
         ChassisApp_IsFinite(CHASSIS_APP_WHEEL_DIAMETER_M) == 0U ||
         ChassisApp_IsFinite(CHASSIS_APP_LENGTH_M) == 0U ||
         ChassisApp_IsFinite(CHASSIS_APP_WIDTH_M) == 0U ||
@@ -360,5 +443,5 @@ void ChassisApp_RunPeriodic(void)
         (void)dji_motor_group_update(&s_groups[i], now_ms);
     }
 
-    ChassisApp_UpdateFeedback(now_ms, elapsed_ms);
+    ChassisApp_UpdateFeedback(now_ms);
 }
