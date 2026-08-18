@@ -105,12 +105,12 @@ typedef struct {
 } rs_motor_multi_turn_state_t;
 
 typedef struct {
-    uint8_t online;
+    volatile uint8_t online;
     uint8_t enabled;
     rs_motor_control_mode_t control_mode;
 
-    uint32_t feedback_count;
-    uint32_t last_update_ms;
+    volatile uint32_t feedback_count;
+    volatile uint32_t last_update_ms;
     rs_motor_multi_turn_state_t multi_turn;
 } rs_motor_state_t;
 
@@ -157,11 +157,23 @@ typedef struct {
     float multi_turn_speed_limit_rad_s;
     float csp_current_limit_a;
     float csp_speed_limit_rad_s;
+    float pp_current_limit_a;
+    float pp_speed_rad_s;
+    float pp_acceleration_rad_s2;
     uint32_t multi_turn_last_control_ms;
+
+    volatile uint32_t tx_error_count;
+    volatile uint32_t last_hal_error;
+    volatile uint32_t offline_transition_count;
+    volatile uint32_t online_recovery_count;
+    volatile uint32_t max_feedback_gap_ms;
 
     uint8_t initialized;
     uint8_t mode_applied;
     uint8_t csp_limited_parameters_applied;
+    uint8_t csp_speed_limit_applied;
+    uint8_t pp_parameters_applied;
+    uint8_t pp_current_limit_applied;
     uint8_t multi_turn_control_timer_started;
     rs_motor_control_mode_t applied_control_mode;
     rs_motor_t *next;

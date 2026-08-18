@@ -26,6 +26,14 @@ volatile uint32_t g_fdcan1_bus_off;
 volatile uint32_t g_fdcan1_tx_error_count;
 volatile uint32_t g_fdcan1_rx_error_count;
 
+static volatile uint32_t s_fdcan3_rx_frame_count;
+static volatile uint32_t s_fdcan3_rx_handled_count;
+static volatile uint32_t s_fdcan3_rx_unhandled_count;
+static volatile uint32_t s_fdcan3_rx_read_error_count;
+static volatile uint32_t s_fdcan3_rx_fifo_max_fill;
+static volatile uint32_t s_fdcan3_rx_fifo_full_count;
+static volatile uint32_t s_fdcan3_rx_message_lost_count;
+
 static void bsp_fdcan1_update_debug_status(void)
 {
     FDCAN_ProtocolStatusTypeDef protocol_status;
@@ -59,7 +67,11 @@ void bsp_can_init(void)
     (void)HAL_FDCAN_ActivateNotification(
         &hfdcan2, FDCAN_IT_RX_FIFO0_NEW_MESSAGE, 0U);
     (void)HAL_FDCAN_ActivateNotification(
-        &hfdcan3, FDCAN_IT_RX_FIFO0_NEW_MESSAGE, 0U);
+        &hfdcan3,
+        FDCAN_IT_RX_FIFO0_NEW_MESSAGE |
+            FDCAN_IT_RX_FIFO0_FULL |
+            FDCAN_IT_RX_FIFO0_MESSAGE_LOST,
+        0U);
 }
 
 void can_filter_init(void)
@@ -110,27 +122,24 @@ void can_filter_init(void)
         &hfdcan3, FDCAN_CFG_RX_FIFO0, 1U);
 }
 
-static void bsp_fdcan_handle_rx(FDCAN_HandleTypeDef *hfdcan)
+static uint8_t bsp_fdcan_handle_rx_frame(FDCAN_HandleTypeDef *hfdcan)
 {
     FDCAN_RxHeaderTypeDef header;
     uint8_t data[8];
     uint8_t handled = 0U;
 
-    if (hfdcan == &hfdcan1) {
-        g_fdcan1_rx_callback_count++;
-    } else if (hfdcan == &hfdcan2) {
-        g_fdcan2_rx_callback_count++;
-    } else if (hfdcan == &hfdcan3) {
-        g_fdcan3_rx_callback_count++;
-    } else {
-        return;
-    }
-
     if (HAL_FDCAN_GetRxMessage(hfdcan,
                                FDCAN_RX_FIFO0,
                                &header,
                                data) != HAL_OK) {
-        return;
+        if (hfdcan == &hfdcan3) {
+            s_fdcan3_rx_read_error_count++;
+        }
+        return 0U;
+    }
+
+    if (hfdcan == &hfdcan3) {
+        s_fdcan3_rx_frame_count++;
     }
 
     if (hfdcan == &hfdcan1) {
@@ -159,16 +168,49 @@ static void bsp_fdcan_handle_rx(FDCAN_HandleTypeDef *hfdcan)
             g_fdcan1_non_dji_count++;
         }
         bsp_fdcan1_update_debug_status();
+    } else if (hfdcan == &hfdcan3) {
+        if (handled != 0U) {
+            s_fdcan3_rx_handled_count++;
+        } else {
+            s_fdcan3_rx_unhandled_count++;
+        }
     }
+    return 1U;
 }
 
 void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan,
                                uint32_t rx_fifo0_its)
 {
-    (void)rx_fifo0_its;
+    uint32_t pending_frames;
 
     if (hfdcan == &hfdcan1) {
         g_fdcan1_hal_rx_callback_count++;
+        g_fdcan1_rx_callback_count++;
+    } else if (hfdcan == &hfdcan2) {
+        g_fdcan2_rx_callback_count++;
+    } else if (hfdcan == &hfdcan3) {
+        g_fdcan3_rx_callback_count++;
+        if ((rx_fifo0_its & FDCAN_IT_RX_FIFO0_FULL) != 0U) {
+            s_fdcan3_rx_fifo_full_count++;
+        }
+        if ((rx_fifo0_its & FDCAN_IT_RX_FIFO0_MESSAGE_LOST) != 0U) {
+            s_fdcan3_rx_message_lost_count++;
+        }
+    } else {
+        return;
     }
-    bsp_fdcan_handle_rx(hfdcan);
+
+    pending_frames = HAL_FDCAN_GetRxFifoFillLevel(hfdcan,
+                                                   FDCAN_RX_FIFO0);
+    if (hfdcan == &hfdcan3 &&
+        pending_frames > s_fdcan3_rx_fifo_max_fill) {
+        s_fdcan3_rx_fifo_max_fill = pending_frames;
+    }
+
+    while (pending_frames > 0U) {
+        if (bsp_fdcan_handle_rx_frame(hfdcan) == 0U) {
+            break;
+        }
+        pending_frames--;
+    }
 }

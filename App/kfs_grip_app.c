@@ -185,6 +185,7 @@ void KfsGripApp_Init(void)
 void KfsGripApp_RunPeriodic(void)
 {
     uint32_t now_ms;
+    rs_motor_status_t status;
 
     if (s_initialized == 0U) {
         KfsGripApp_ClearFeedback();
@@ -194,7 +195,11 @@ void KfsGripApp_RunPeriodic(void)
     now_ms = HAL_GetTick();
 
     /* 离线判断由驱动按反馈时间戳处理，不能按主循环次数判断。 */
-    if (rs_motor_update(&s_motor, now_ms) != RS_MOTOR_OK) {
+    status = rs_motor_update(&s_motor, now_ms);
+    if (status != RS_MOTOR_OK) {
+        if (status == RS_MOTOR_ERROR_FDCAN_TX) {
+            return;
+        }
         KfsGripApp_FailAndDisable();
         return;
     }
@@ -226,11 +231,15 @@ void KfsGripApp_RunPeriodic(void)
      * 电流/速度只在首次配置、参数变化或离线恢复时写入；正常周期只
      * 重发位置目标，作为 CAN keepalive 并刷新电机 Type 2 反馈。
      */
-    if (rs_motor_csp_position_control_limited(
-            &s_motor,
-            KFS_GRIP_APP_CSP_CURRENT_LIMIT_A,
-            KFS_GRIP_APP_CSP_SPEED_LIMIT_RAD_S,
-            s_target_position_rad) != RS_MOTOR_OK) {
+    status = rs_motor_csp_position_control_limited(
+        &s_motor,
+        KFS_GRIP_APP_CSP_CURRENT_LIMIT_A,
+        KFS_GRIP_APP_CSP_SPEED_LIMIT_RAD_S,
+        s_target_position_rad);
+    if (status != RS_MOTOR_OK) {
+        if (status == RS_MOTOR_ERROR_FDCAN_TX) {
+            return;
+        }
         KfsGripApp_FailAndDisable();
         return;
     }

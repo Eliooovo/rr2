@@ -100,6 +100,37 @@ command timeout. A lift command received before a motor becomes online is
 retained. Each motor starts controlling independently after its own first
 feedback establishes that motor's software zero.
 
+## 武器夹爪舵机位置与校准
+
+武器夹爪使用 UART7 上 ID=6 的 STS3215 舵机。上位机位置命令和反馈的
+单位均为 m，`WeaponGripApp` 按下式与舵机原始位置互换：
+
+```text
+raw = 3072 - position_m * 34133.33
+position_m = (3072 - raw) / 34133.33
+```
+
+| 夹爪机械位置 | 上位机位置 | 舵机 raw |
+|---|---:|---:|
+| 闭合（夹爪逻辑零位） | 0 m | 3072 |
+| 半开 | 约 0.015 m | 约 2560 |
+| 全开（舵机电子中位） | 0.03 m | 2048 |
+
+因此，舵机的电子中位 `raw=2048` 对应夹爪全开；夹爪命令的逻辑零位
+`0 m` 对应闭合 `raw=3072`，两个“零位”不是同一个基准。
+
+重新安装舵盘或夹爪后，校准步骤如下：
+
+1. 失能舵机，确保装配时不会突然运动。
+2. 把夹爪放在机械全开位。
+3. 通过舵机调试工具执行“中位校准”，使该位置反馈 `raw≈2048`；不要把
+   夹爪闭合位校为舵机中位或 `raw=0`。
+4. 安装舵盘和连杆后，先下发 `0.03 m` 验证全开位基本不动，再逐步减小
+   命令至 `0 m`，检查闭合位且确认机构没有顶死。
+
+固件启动时只使能舵机，在收到第一个有效上位机命令前不下发位置目标。
+中位校准不会在启动时自动执行，需要使用舵机调试工具单独完成。
+
 ## Chassis configuration
 
 User-adjustable chassis settings are in `App/chassis_app.h`:

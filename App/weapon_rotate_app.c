@@ -119,8 +119,14 @@ static void WeaponRotateJoint_UpdateFeedback(weapon_rotate_joint_t *joint,
 static void WeaponRotateJoint_RunPeriodic(weapon_rotate_joint_t *joint,
                                            uint32_t now_ms)
 {
+    rs_motor_status_t status;
+
     /* 离线判断由驱动按反馈时间戳处理，不能按主循环次数判断。 */
-    if (rs_motor_update(&joint->motor, now_ms) != RS_MOTOR_OK) {
+    status = rs_motor_update(&joint->motor, now_ms);
+    if (status != RS_MOTOR_OK) {
+        if (status == RS_MOTOR_ERROR_FDCAN_TX) {
+            return;
+        }
         WeaponRotateJoint_FailAndDisable(joint);
         return;
     }
@@ -156,10 +162,14 @@ static void WeaponRotateJoint_RunPeriodic(weapon_rotate_joint_t *joint,
      *   电机内部以不超过 speed_limit 的速度平滑移动到目标位置，
      *   到位后自动保持。
      */
-    if (rs_motor_csp_position_control(
-            &joint->motor,
-            WEAPON_ROTATE_APP_MAX_SPEED_RAD_S,
-            joint->target_position_rad) != RS_MOTOR_OK) {
+    status = rs_motor_csp_position_control(
+        &joint->motor,
+        WEAPON_ROTATE_APP_MAX_SPEED_RAD_S,
+        joint->target_position_rad);
+    if (status != RS_MOTOR_OK) {
+        if (status == RS_MOTOR_ERROR_FDCAN_TX) {
+            return;
+        }
         WeaponRotateJoint_FailAndDisable(joint);
         return;
     }

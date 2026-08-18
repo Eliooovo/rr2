@@ -41,6 +41,8 @@ typedef struct {
 static kfs_rotate_joint_t s_root;
 static kfs_rotate_joint_t s_tip;
 static uint8_t s_initialized;
+static volatile rs_motor_status_t s_root_cur_kp_write_status;
+static volatile rs_motor_status_t s_root_cur_ki_write_status;
 static volatile rs_motor_status_t s_root_loc_kp_write_status;
 static volatile rs_motor_status_t s_root_spd_kp_write_status;
 static volatile rs_motor_status_t s_root_spd_ki_write_status;
@@ -69,7 +71,7 @@ static uint8_t KfsRotateJoint_FeedbackIsRecent(const kfs_rotate_joint_t *joint,
 {
     return (joint->motor.state.online != 0U &&
             (uint32_t)(now_ms - joint->motor.state.last_update_ms) <
-                KFS_ROTATE_APP_OFFLINE_TIMEOUT_MS) ? 1U : 0U;
+                joint->motor.config.offline_timeout_ms) ? 1U : 0U;
 }
 
 /* 检查上位机新命令：sequence 递增说明收到新帧，更新目标。 */
@@ -169,6 +171,10 @@ static void KfsRotateJoint_RunPeriodic(kfs_rotate_joint_t *joint,
     }
     joint->last_control_status = status;
     if (status != RS_MOTOR_OK) {
+        /* TX FIFO 瞬时满时保留当前使能和目标，下一周期直接重试。 */
+        if (status == RS_MOTOR_STATUS_FDCAN_TX_ERROR) {
+            return;
+        }
         KfsRotateJoint_FailAndDisable(joint);
         return;
     }
@@ -180,6 +186,7 @@ static void KfsRotateJoint_Init(kfs_rotate_joint_t *joint,
                                 uint8_t motor_id,
                                 rs_motor_type_t motor_type,
                                 uint8_t use_pp,
+                                uint32_t offline_timeout_ms,
                                 const volatile float *command_rad,
                                 volatile float *feedback_rad,
                                 volatile uint8_t *feedback_valid)
@@ -197,7 +204,7 @@ static void KfsRotateJoint_Init(kfs_rotate_joint_t *joint,
     joint->motor.config.motor_id = motor_id;
     joint->motor.config.master_id = 0xFDU;
     joint->motor.config.motor_type = motor_type;
-    joint->motor.config.offline_timeout_ms = KFS_ROTATE_APP_OFFLINE_TIMEOUT_MS;
+    joint->motor.config.offline_timeout_ms = offline_timeout_ms;
 
     if (rs_motor_init(&joint->motor) != RS_MOTOR_OK) {
         KfsRotateJoint_FailAndDisable(joint);
@@ -227,7 +234,9 @@ void KfsRotateApp_Init(void)
         KFS_ROTATE_APP_ROOT_PP_CURRENT_LIMIT_A <= 0.0f ||
         KFS_ROTATE_APP_CTRL_PERIOD_MS == 0U ||
         KFS_ROTATE_APP_CTRL_PERIOD_MS >=
-            KFS_ROTATE_APP_OFFLINE_TIMEOUT_MS) {
+            KFS_ROTATE_APP_ROOT_OFFLINE_TIMEOUT_MS ||
+        KFS_ROTATE_APP_CTRL_PERIOD_MS >=
+            KFS_ROTATE_APP_TIP_OFFLINE_TIMEOUT_MS) {
         return;
     }
 
@@ -237,6 +246,7 @@ void KfsRotateApp_Init(void)
         2U,
         RS_MOTOR_TYPE_3,
         1U,
+        KFS_ROTATE_APP_ROOT_OFFLINE_TIMEOUT_MS,
         &g_comm_app_command.kfs_root_rotate_rad,
         &g_comm_app_feedback.kfs_root_rotate_rad,
         &g_comm_app_feedback.kfs_root_rotate_valid);
@@ -247,20 +257,24 @@ void KfsRotateApp_Init(void)
         3U,
         RS_MOTOR_TYPE_0,
         0U,
+        KFS_ROTATE_APP_TIP_OFFLINE_TIMEOUT_MS,
         &g_comm_app_command.kfs_tip_rotate_rad,
         &g_comm_app_feedback.kfs_tip_rotate_rad,
         &g_comm_app_feedback.kfs_tip_rotate_valid);
 
     /*
      * RS03（根部）电机内部位置/速度环 PID（PP 模式仍使用）。
-     * 提高位置环增益以增加偏离目标时的保持阻力，
-     * 同时回调速度环比例增益，减少负载静止时对编码器
-     * 微小速度抖动的放大。
+     * 在保留带载能力的同时，适度降低速度/电流环增益，
+     * 减少静止保持时对编码器和电流采样噪声的放大。
      */
+    s_root_cur_kp_write_status =
+        rs_motor_write_parameter(&s_root.motor, RS_PARAM_CUR_KP, 0.22f);
+    s_root_cur_ki_write_status =
+        rs_motor_write_parameter(&s_root.motor, RS_PARAM_CUR_KI, 0.012f);
     s_root_loc_kp_write_status =
-        rs_motor_write_parameter(&s_root.motor, RS_PARAM_LOC_KP, 60.0f);
+        rs_motor_write_parameter(&s_root.motor, RS_PARAM_LOC_KP, 100.0f);
     s_root_spd_kp_write_status =
-        rs_motor_write_parameter(&s_root.motor, RS_PARAM_SPD_KP, 6.0f);
+        rs_motor_write_parameter(&s_root.motor, RS_PARAM_SPD_KP, 8.0f);
     s_root_spd_ki_write_status =
         rs_motor_write_parameter(&s_root.motor, RS_PARAM_SPD_KI, 0.02f);
 

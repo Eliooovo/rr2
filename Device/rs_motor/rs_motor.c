@@ -210,6 +210,9 @@ static rs_motor_status_t rs_motor_send(rs_motor_t *motor,
     if (HAL_FDCAN_AddMessageToTxFifoQ(motor->config.hfdcan,
                                       &header,
                                       (uint8_t *)data) != HAL_OK) {
+        motor->internal.tx_error_count++;
+        motor->internal.last_hal_error =
+            HAL_FDCAN_GetError(motor->config.hfdcan);
         return RS_MOTOR_STATUS_FDCAN_TX_ERROR;
     }
     return RS_MOTOR_STATUS_OK;
@@ -550,6 +553,9 @@ static rs_motor_status_t rs_motor_pp_position_control_impl(
     float position_rad)
 {
     rs_motor_status_t status = rs_motor_require_initialized(motor);
+    uint8_t mode_changed;
+    uint8_t parameters_changed;
+    uint8_t current_limit_changed;
 
     if (status != RS_MOTOR_STATUS_OK) {
         return status;
@@ -570,6 +576,21 @@ static rs_motor_status_t rs_motor_pp_position_control_impl(
                                   motor->internal.position_min,
                                   motor->internal.position_max);
 
+    mode_changed = (motor->internal.mode_applied == 0U ||
+                    motor->internal.applied_control_mode !=
+                        RS_MOTOR_CONTROL_MODE_PP_POSITION) ? 1U : 0U;
+    parameters_changed =
+        (mode_changed != 0U ||
+         motor->internal.pp_parameters_applied == 0U ||
+         motor->internal.pp_speed_rad_s != speed_rad_s ||
+         motor->internal.pp_acceleration_rad_s2 != acceleration_rad_s2) ?
+            1U : 0U;
+    current_limit_changed =
+        (write_current_limit != 0U &&
+         (mode_changed != 0U ||
+          motor->internal.pp_current_limit_applied == 0U ||
+          motor->internal.pp_current_limit_a != current_limit_a)) ? 1U : 0U;
+
     status = rs_motor_apply_mode(motor, RS_MOTOR_CONTROL_MODE_PP_POSITION);
     if (status != RS_MOTOR_STATUS_OK) {
         if (motor->state.enabled == 0U) {
@@ -578,21 +599,35 @@ static rs_motor_status_t rs_motor_pp_position_control_impl(
         return status;
     }
     rs_motor_cancel_multi_turn(motor);
-    status = rs_motor_write_float(motor, RS_PARAM_PP_SPEED, speed_rad_s);
-    if (status != RS_MOTOR_STATUS_OK) {
-        return status;
+    if (parameters_changed != 0U) {
+        status = rs_motor_write_float(motor, RS_PARAM_PP_SPEED, speed_rad_s);
+        if (status != RS_MOTOR_STATUS_OK) {
+            return status;
+        }
+        status = rs_motor_write_float(motor,
+                                      RS_PARAM_PP_ACCELERATION,
+                                      acceleration_rad_s2);
+        if (status != RS_MOTOR_STATUS_OK) {
+            return status;
+        }
     }
-    status = rs_motor_write_float(motor, RS_PARAM_PP_ACCELERATION, acceleration_rad_s2);
-    if (status != RS_MOTOR_STATUS_OK) {
-        return status;
-    }
-    if (write_current_limit != 0U) {
+    if (current_limit_changed != 0U) {
         status = rs_motor_write_float(motor,
                                       RS_PARAM_CURRENT_LIMIT,
                                       current_limit_a);
         if (status != RS_MOTOR_STATUS_OK) {
             return status;
         }
+    }
+
+    if (parameters_changed != 0U) {
+        motor->internal.pp_speed_rad_s = speed_rad_s;
+        motor->internal.pp_acceleration_rad_s2 = acceleration_rad_s2;
+        motor->internal.pp_parameters_applied = 1U;
+    }
+    if (current_limit_changed != 0U) {
+        motor->internal.pp_current_limit_a = current_limit_a;
+        motor->internal.pp_current_limit_applied = 1U;
     }
     return rs_motor_write_float(motor, RS_PARAM_POSITION_TARGET, position_rad);
 }
@@ -635,6 +670,7 @@ static rs_motor_status_t rs_motor_csp_position_control_impl(
     rs_motor_status_t status = rs_motor_require_initialized(motor);
     uint8_t mode_changed;
     uint8_t limited_parameters_changed;
+    uint8_t speed_limit_changed;
 
     if (status != RS_MOTOR_STATUS_OK) {
         return status;
@@ -666,6 +702,7 @@ static rs_motor_status_t rs_motor_csp_position_control_impl(
         motor->internal.mode_applied = 0U;
         motor->internal.applied_control_mode = RS_MOTOR_CONTROL_MODE_NONE;
         motor->internal.csp_limited_parameters_applied = 0U;
+        motor->internal.csp_speed_limit_applied = 0U;
     }
 
     speed_limit_rad_s = rs_motor_clamp(speed_limit_rad_s,
@@ -679,8 +716,15 @@ static rs_motor_status_t rs_motor_csp_position_control_impl(
                     motor->internal.applied_control_mode !=
                         RS_MOTOR_CONTROL_MODE_CSP_POSITION) ? 1U : 0U;
     limited_parameters_changed =
-        (motor->internal.csp_limited_parameters_applied == 0U ||
-         motor->internal.csp_current_limit_a != current_limit_a ||
+        (write_current_limit != 0U &&
+         (mode_changed != 0U ||
+          motor->internal.csp_limited_parameters_applied == 0U ||
+          motor->internal.csp_current_limit_a != current_limit_a ||
+          motor->internal.csp_speed_limit_rad_s != speed_limit_rad_s)) ?
+            1U : 0U;
+    speed_limit_changed =
+        (mode_changed != 0U ||
+         motor->internal.csp_speed_limit_applied == 0U ||
          motor->internal.csp_speed_limit_rad_s != speed_limit_rad_s) ? 1U : 0U;
 
     status = rs_motor_apply_mode(motor, RS_MOTOR_CONTROL_MODE_CSP_POSITION);
@@ -691,31 +735,25 @@ static rs_motor_status_t rs_motor_csp_position_control_impl(
         return status;
     }
     rs_motor_cancel_multi_turn(motor);
-    if (write_current_limit != 0U &&
-        (mode_changed != 0U || limited_parameters_changed != 0U)) {
+    if (limited_parameters_changed != 0U) {
         status = rs_motor_write_float(motor,
                                       RS_PARAM_CURRENT_LIMIT,
                                       current_limit_a);
         if (status != RS_MOTOR_STATUS_OK) {
             return status;
         }
-        status = rs_motor_write_float(motor,
-                                      RS_PARAM_CSP_SPEED_LIMIT,
-                                      speed_limit_rad_s);
-        if (status != RS_MOTOR_STATUS_OK) {
-            return status;
-        }
         motor->internal.csp_current_limit_a = current_limit_a;
-        motor->internal.csp_speed_limit_rad_s = speed_limit_rad_s;
         motor->internal.csp_limited_parameters_applied = 1U;
-    } else if (write_current_limit == 0U) {
+    }
+    if (speed_limit_changed != 0U) {
         status = rs_motor_write_float(motor,
                                       RS_PARAM_CSP_SPEED_LIMIT,
                                       speed_limit_rad_s);
         if (status != RS_MOTOR_STATUS_OK) {
             return status;
         }
-        motor->internal.csp_limited_parameters_applied = 0U;
+        motor->internal.csp_speed_limit_rad_s = speed_limit_rad_s;
+        motor->internal.csp_speed_limit_applied = 1U;
     }
     return rs_motor_write_float(motor, RS_PARAM_POSITION_TARGET, position_rad);
 }
@@ -926,6 +964,7 @@ uint8_t rs_motor_handle_rx(FDCAN_HandleTypeDef *hfdcan,
                            const uint8_t data[8],
                            uint32_t now_ms)
 {
+    uint32_t feedback_gap_ms;
     uint32_t identifier;
     uint16_t communication_data;
     uint8_t communication_type;
@@ -1015,15 +1054,27 @@ uint8_t rs_motor_handle_rx(FDCAN_HandleTypeDef *hfdcan,
         motor->internal.previous_feedback_angle_rad = angle_rad;
     }
 
-    motor->state.online = 1U;
+    if (motor->state.feedback_count != 0U) {
+        feedback_gap_ms = (uint32_t)(now_ms - motor->state.last_update_ms);
+        if (feedback_gap_ms > motor->internal.max_feedback_gap_ms) {
+            motor->internal.max_feedback_gap_ms = feedback_gap_ms;
+        }
+        if (motor->state.online == 0U) {
+            motor->internal.online_recovery_count++;
+        }
+    }
     motor->state.feedback_count++;
     motor->state.last_update_ms = now_ms;
+    __DMB();
+    motor->state.online = 1U;
     return 1U;
 }
 
 rs_motor_status_t rs_motor_update(rs_motor_t *motor, uint32_t now_ms)
 {
     rs_motor_status_t status = rs_motor_require_initialized(motor);
+    uint32_t interrupt_mask;
+    uint32_t feedback_elapsed_ms;
     rs_motor_feedback_t feedback;
     double position_error_rad;
     double speed_command_rad_s;
@@ -1035,10 +1086,22 @@ rs_motor_status_t rs_motor_update(rs_motor_t *motor, uint32_t now_ms)
     if (status != RS_MOTOR_STATUS_OK) {
         return status;
     }
+    interrupt_mask = __get_PRIMASK();
+    __disable_irq();
+    __DMB();
+    feedback_elapsed_ms =
+        (uint32_t)(now_ms - motor->state.last_update_ms);
     if (motor->state.feedback_count != 0U &&
-        (uint32_t)(now_ms - motor->state.last_update_ms) >=
+        motor->state.online != 0U &&
+        feedback_elapsed_ms < 0x80000000UL &&
+        feedback_elapsed_ms >=
             motor->config.offline_timeout_ms) {
         motor->state.online = 0U;
+        motor->internal.offline_transition_count++;
+    }
+    __DMB();
+    if (interrupt_mask == 0U) {
+        __enable_irq();
     }
 
     if (motor->state.multi_turn.active == 0U) {

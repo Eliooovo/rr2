@@ -197,6 +197,7 @@ void KfsLiftApp_RunPeriodic(void)
 {
     uint32_t now_ms;
     uint32_t elapsed_ms;
+    rs_motor_status_t status;
 
     if (s_initialized == 0U) {
         KfsLiftApp_ClearFeedback();
@@ -222,19 +223,27 @@ void KfsLiftApp_RunPeriodic(void)
      * 第一次收到有效目标或目标变化时，配置 RobStride 连续多圈位置模式。
      * 没有命令时只更新在线状态和反馈，不主动给电机下发运动目标。
      */
-    if (s_target_received != 0U &&
-        s_target_applied == 0U &&
-        rs_motor_multi_turn_position_control(
+    if (s_target_received != 0U && s_target_applied == 0U) {
+        status = rs_motor_multi_turn_position_control(
             &s_motor,
             KFS_LIFT_APP_MAX_SPEED_RAD_S,
             KFS_LIFT_APP_ACCELERATION_RAD_S2,
-            s_target_position_rad) != RS_MOTOR_OK) {
-        KfsLiftApp_FailAndDisable();
-        return;
+            s_target_position_rad);
+        if (status != RS_MOTOR_OK) {
+            if (status == RS_MOTOR_ERROR_FDCAN_TX) {
+                return;
+            }
+            KfsLiftApp_FailAndDisable();
+            return;
+        }
     }
     s_target_applied = s_target_received;
 
-    if (rs_motor_update(&s_motor, now_ms) != RS_MOTOR_OK) {
+    status = rs_motor_update(&s_motor, now_ms);
+    if (status != RS_MOTOR_OK) {
+        if (status == RS_MOTOR_ERROR_FDCAN_TX) {
+            return;
+        }
         KfsLiftApp_FailAndDisable();
         return;
     }

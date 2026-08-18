@@ -21,6 +21,8 @@
 #include "SCS.h"
 #include "SMS_STS.h"
 
+#define STS_SERVO_UART_TX_TIMEOUT_MS 5U
+
 /* ========================================================================
  * 硬件抽象层 —— 供 SCSLib 全局调用
  * ======================================================================== */
@@ -31,6 +33,8 @@ static UART_HandleTypeDef *g_huart;
 /** 发送缓冲，供 writeSCS / writeByteSCS 逐字节累积。 */
 static uint8_t g_tx_buf[128];
 static uint8_t g_tx_len;
+static volatile uint32_t s_uart_tx_error_count;
+static volatile HAL_StatusTypeDef s_last_uart_tx_status = HAL_OK;
 
 /**
  * @brief 从 UART 阻塞读取 nLen 字节。
@@ -87,7 +91,13 @@ void rFlushSCS(void)
 void wFlushSCS(void)
 {
     if (g_tx_len) {
-        HAL_UART_Transmit(g_huart, g_tx_buf, g_tx_len, 100);
+        s_last_uart_tx_status = HAL_UART_Transmit(g_huart,
+                                                  g_tx_buf,
+                                                  g_tx_len,
+                                                  STS_SERVO_UART_TX_TIMEOUT_MS);
+        if (s_last_uart_tx_status != HAL_OK) {
+            s_uart_tx_error_count++;
+        }
         g_tx_len = 0;
     }
 }
