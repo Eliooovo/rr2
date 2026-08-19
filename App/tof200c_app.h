@@ -14,7 +14,7 @@ extern "C" {
 
 #include "stm32h7xx_hal.h"
 
-/** TOF200C 状态机调用周期，单位 ms。 */
+/** TOF200C 在线异步处理周期，单位 ms；掉线后不自动恢复。 */
 #define TOF200C_APP_PROCESS_PERIOD_MS 20U
 
 void Tof200cApp_Init(void);

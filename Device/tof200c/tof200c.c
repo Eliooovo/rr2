@@ -13,9 +13,6 @@
 #define TOF200C_XSHUT_DELAY_MS 30U
 #define TOF200C_TRANSFER_TIMEOUT_MS 20U
 #define TOF200C_DATA_TIMEOUT_MS 500U
-#define TOF200C_RECOVERY_RETRY_MS 5000U
-#define TOF200C_RECOVERY_BACKOFF_BASE_MS 5000U
-#define TOF200C_RECOVERY_BACKOFF_MAX_MS 60000U
 #define TOF200C_MAX_CLEAR_ATTEMPTS 3U
 
 typedef struct {
@@ -98,11 +95,6 @@ static tof200c_status_t tof200c_set_pal_error(tof200c_t *device,
   return TOF200C_STATUS_PAL_ERROR;
 }
 
-static bool tof200c_time_reached(uint32_t now_ms, uint32_t target_ms)
-{
-  return (int32_t)(now_ms - target_ms) >= 0;
-}
-
 static bool tof200c_time_elapsed(uint32_t now_ms, uint32_t start_ms,
                                 uint32_t timeout_ms)
 {
@@ -135,15 +127,6 @@ static void tof200c_mark_offline(tof200c_t *device,
   device->fault.failed_transfer_state = failed_transfer;
   device->internal.transfer_state = TOF200C_TRANSFER_IDLE;
   device->internal.data_pending = false;
-  if (device->internal.recovery_backoff_ms == 0U) {
-    device->internal.recovery_backoff_ms = TOF200C_RECOVERY_BACKOFF_BASE_MS;
-  } else {
-    uint32_t next = device->internal.recovery_backoff_ms * 2U;
-    device->internal.recovery_backoff_ms =
-        (next > TOF200C_RECOVERY_BACKOFF_MAX_MS) ? TOF200C_RECOVERY_BACKOFF_MAX_MS
-                                                  : next;
-  }
-  device->internal.recovery_after_ms = now_ms + device->internal.recovery_backoff_ms;
   device->state.connection = TOF200C_CONNECTION_OFFLINE;
   device->state.changed_at_ms = now_ms;
   tof200c_exit_critical(primask);
@@ -315,10 +298,16 @@ static VL53L0X_Error tof200c_apply_profile(tof200c_t *device)
 
 /*
  * ============================================================
- *  恢复状态机（替代阻塞的 tof200c_start_sensor）
+ *  启动/显式恢复状态机
  * ============================================================
  *
- * 【为什么需要状态机】
+ * 【使用范围】
+ *   - tof200c_init() 在主循环启动前同步驱动该状态机。
+ *   - tof200c_recover() 是保留的显式阻塞恢复接口。
+ *   - 运行期掉线后 tof200c_process() 不自动启动恢复，
+ *     传感器保持 OFFLINE 直到主控重启或上层显式调用恢复接口。
+ *
+ * 【为什么保留状态机】
  *   原来的 tof200c_start_sensor() 在主循环中同步阻塞：
  *     - HAL_Delay(30) x 2 = 60ms 固定空转
  *     - VL53L0X_StaticInit 内含 SPAD 管理循环，可达 200-400ms
@@ -327,10 +316,11 @@ static VL53L0X_Error tof200c_apply_profile(tof200c_t *device)
  *   阻塞期间底盘/抬升 PID 中断，电机失能，遥控器推杆无响应。
  *
  * 【状态机如何工作】
- *   将启动序列拆为 10 个离散状态。tof200c_process() 每次调用时
+ *   将启动序列拆为 10 个离散状态，由开机初始化或显式恢复路径
  *   推进一步：
  *     - "等待"状态只检查 HAL_GetTick() 差值，不阻塞
- *     - "动作"状态执行一个 VL53L0X API 调用（内部阻塞 I2C < 5ms）
+ *     - "动作"状态执行一个 VL53L0X API 调用。
+ *       该 API 仍使用同步 I2C，故仅允许用于开机或显式恢复路径。
  *     - 步与步之间主循环完整执行一轮（Comm→RC→Chassis→Lift→...）
  *
  *   流程：
@@ -353,7 +343,7 @@ static VL53L0X_Error tof200c_apply_profile(tof200c_t *device)
  *       SPAD 管理循环（~200-400ms → ~20ms）
  *     - StaticInit 后用 VL53L0X_set_reference_spads / set_ref_calibration
  *       恢复缓存的校准值
- *     - 适用场景：传感器短暂掉线（I2C 干扰、传输超时、数据超时）
+ *     - 适用场景：上层明确请求恢复已完成过初始化的传感器
  *
  *   全量恢复 (recovery_is_light = false)：
  *     - StaticInit 完整执行 SPAD 管理 + 调谐加载
@@ -364,7 +354,7 @@ static VL53L0X_Error tof200c_apply_profile(tof200c_t *device)
  * 【错误处理】
  *   任一步骤失败：
  *     - 轻量恢复 → tof200c_recovery_fallback() 回退为全量，从头开始
- *     - 全量恢复 → tof200c_recovery_fail() 标记 OFFLINE，退避重试
+ *     - 全量恢复 → tof200c_recovery_fail() 标记 OFFLINE，不自动重试
  *
  * 【阻塞变体】
  *   tof200c_run_recovery_blocking() 循环调用 recovery_tick() 直到完成。
@@ -381,7 +371,7 @@ static VL53L0X_Error tof200c_apply_profile(tof200c_t *device)
  * 3. 自动选择轻量/全量恢复路径（基于 calibration_cached）
  * 4. 拉低 XSHUT 引脚，进入 XSHUT_LOW_WAIT 状态
  *
- * 之后由 tof200c_process() → tof200c_recovery_tick() 逐步推进。
+ * 之后由开机/显式恢复的阻塞运行器逐步推进。
  */
 static void tof200c_start_recovery(tof200c_t *device,
                                    bool reset_i2c,
@@ -437,19 +427,18 @@ static void tof200c_recovery_fail(tof200c_t *device,
 /**
  * 推进恢复状态机一步。
  *
- * 由 tof200c_process() 每次调用时驱动，确保主循环在每一步之间
- * 都有机会运行完整的底盘/抬升/遥控处理。
+ * 由开机初始化或显式恢复路径驱动。运行期自动处理不会进入该状态机。
  *
  * 等待状态（XSHUT_LOW_WAIT、XSHUT_HIGH_WAIT）：
  *   - 检查距步骤开始是否已过 TOF200C_XSHUT_DELAY_MS (30ms)
  *   - 未到时间则直接 return，不阻塞
  *
  * 动作状态（其余）：
- *   - 执行单个 VL53L0X API 调用（内有阻塞 I2C 但 <5ms）
+ *   - 执行单个 VL53L0X API 调用，其同步 I2C 最长可等待平台超时。
  *   - 成功 → 进入下一状态并 return
  *   - 失败 → 轻量回退全量 / 全量标记 OFFLINE
  *
- * 所有 I2C 阻塞都局限于当前步骤内，步骤之间主循环正常运行。
+ * 因此该函数不得由运行期自动重试路径调用。
  */
 static void tof200c_recovery_tick(tof200c_t *device)
 {
@@ -678,7 +667,6 @@ static void tof200c_recovery_tick(tof200c_t *device)
 
     if (device->internal.count_recovery) {
       device->fault.recovery_count++;
-      device->internal.recovery_backoff_ms = 0U;
     }
     tof200c_set_connection(device, TOF200C_CONNECTION_ONLINE);
     device->internal.recovery_step = TOF200C_RECOVERY_IDLE;
@@ -741,7 +729,7 @@ tof200c_status_t tof200c_init(tof200c_t *device)
 
   /* Boot-time init: run the full recovery state machine synchronously.
    * This blocks the main() startup path (acceptable — nothing else runs
-   * yet) while exercising the exact same code as runtime recovery. */
+   * yet) while exercising the same code as explicit recovery. */
   tof200c_start_recovery(device, false, false);
   return tof200c_run_recovery_blocking(device);
 }
@@ -799,18 +787,11 @@ void tof200c_process(tof200c_t *device)
 
   now_ms = HAL_GetTick();
 
-  /* ---- Offline → start recovery state machine ---- */
+  /*
+   * 运行期掉线后保持 OFFLINE。不在主循环自动调用含同步
+   * I2C 的 ST 恢复 API，避免平台 100 ms 超时阻塞运动控制。
+   */
   if (device->state.connection == TOF200C_CONNECTION_OFFLINE) {
-    if (device->internal.recovery_step == TOF200C_RECOVERY_IDLE) {
-      if (tof200c_time_reached(now_ms,
-                               device->internal.recovery_after_ms)) {
-        tof200c_start_recovery(device, true, true);
-      }
-    }
-    /* Drive the state machine if a recovery is in progress */
-    if (device->internal.recovery_step != TOF200C_RECOVERY_IDLE) {
-      tof200c_recovery_tick(device);
-    }
     return;
   }
 

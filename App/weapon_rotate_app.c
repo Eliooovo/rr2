@@ -1,6 +1,6 @@
 /**
  * @file    weapon_rotate_app.c
- * @brief   端头旋转关节 CSP 位置控制（限速 ~45°/s）。
+ * @brief   端头旋转关节限流 CSP 位置控制（限速 ~45°/s）。
  *
  * 管理一个旋转关节：端头（RS05, id=5）。
  * 上位机通过 USB 协议下发目标角度（单位 rad），App 在收到首个有效命令
@@ -30,7 +30,6 @@ typedef struct {
     /* 运行时状态 */
     float    target_position_rad;         /* 当前目标位置 */
     uint8_t  target_received;             /* 是否收到过有效命令 */
-    uint8_t  target_applied;              /* 目标是否已下发到电机 */
     uint32_t last_command_sequence;       /* 上次处理的命令序列号 */
     uint32_t last_ctrl_ms;                /* 上次下发 CSP 的时间戳 */
 } weapon_rotate_joint_t;
@@ -56,7 +55,6 @@ static void WeaponRotateJoint_ClearFeedback(weapon_rotate_joint_t *joint)
 static void WeaponRotateJoint_FailAndDisable(weapon_rotate_joint_t *joint)
 {
     WeaponRotateJoint_ClearFeedback(joint);
-    joint->target_applied = 0U;
     (void)rs_motor_disable(&joint->motor);
 }
 
@@ -89,7 +87,6 @@ static void WeaponRotateJoint_UpdateTarget(weapon_rotate_joint_t *joint)
     if (joint->target_received == 0U ||
         target_rad != joint->target_position_rad) {
         joint->target_position_rad = target_rad;
-        joint->target_applied = 0U;
     }
     joint->target_received = 1U;
 }
@@ -151,19 +148,15 @@ static void WeaponRotateJoint_RunPeriodic(weapon_rotate_joint_t *joint,
         return;
     }
 
-    /* 目标已下发且驱动已记录使能 → 跳过，减少 CAN 总线负载。 */
-    if (joint->target_applied != 0U &&
-        joint->motor.state.enabled != 0U) {
-        return;
-    }
-
     /*
-     * CSP（Cyclic Synchronous Position）位置控制：
-     *   电机内部以不超过 speed_limit 的速度平滑移动到目标位置，
-     *   到位后自动保持。
+     * 限流 CSP 位置控制：
+     *   电流限制只在首次配置、参数变化或离线恢复时写入；
+     *   正常周期调用只重发位置目标，同时作为 CAN keepalive。
+     *   顶住机械限位时，位置环输出受 current_limit 限制。
      */
-    status = rs_motor_csp_position_control(
+    status = rs_motor_csp_position_control_limited(
         &joint->motor,
+        WEAPON_ROTATE_APP_CSP_CURRENT_LIMIT_A,
         WEAPON_ROTATE_APP_MAX_SPEED_RAD_S,
         joint->target_position_rad);
     if (status != RS_MOTOR_OK) {
@@ -173,7 +166,6 @@ static void WeaponRotateJoint_RunPeriodic(weapon_rotate_joint_t *joint,
         WeaponRotateJoint_FailAndDisable(joint);
         return;
     }
-    joint->target_applied = 1U;
 }
 
 /* ---- 关节初始化 ---- */
@@ -205,7 +197,6 @@ static void WeaponRotateJoint_Init(weapon_rotate_joint_t *joint,
 
     joint->target_position_rad = 0.0f;
     joint->target_received = 0U;
-    joint->target_applied = 0U;
     joint->last_command_sequence = 0U;
     joint->last_ctrl_ms = 0U;
 }
@@ -219,7 +210,9 @@ void WeaponRotateApp_Init(void)
     }
 
     /* 参数合法性检查（只做一次）。 */
-    if (WeaponRotateIsFinite(WEAPON_ROTATE_APP_MAX_SPEED_RAD_S) == 0U ||
+    if (WeaponRotateIsFinite(WEAPON_ROTATE_APP_CSP_CURRENT_LIMIT_A) == 0U ||
+        WeaponRotateIsFinite(WEAPON_ROTATE_APP_MAX_SPEED_RAD_S) == 0U ||
+        WEAPON_ROTATE_APP_CSP_CURRENT_LIMIT_A <= 0.0f ||
         WEAPON_ROTATE_APP_MAX_SPEED_RAD_S <= 0.0f ||
         WEAPON_ROTATE_APP_CTRL_PERIOD_MS == 0U ||
         WEAPON_ROTATE_APP_CTRL_PERIOD_MS >=

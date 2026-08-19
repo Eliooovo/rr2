@@ -103,13 +103,12 @@ typedef struct {
 /*
  * 传感器恢复状态机步骤。
  *
- * 把原本阻塞 ~60ms（无传感器）到 ~600ms（有传感器但需全量校准）
- * 的 tof200c_start_sensor() 拆分成离散状态，由 tof200c_process() 在
- * 主循环中每次调用时推进一步。
+ * 把原本一次完成的启动序列拆分成离散状态，供开机初始化和上层
+ * 显式调用 tof200c_recover() 时复用。App 主循环不会自动启动它。
  *
  * 两步"等待"状态（XSHUT_LOW_WAIT、XSHUT_HIGH_WAIT）只检查时间，不阻塞。
- * 其余"动作"状态执行一个 VL53L0X API 调用（内部有阻塞 I2C，但通常 <5ms）。
- * 步与步之间主循环正常运转，底盘/抬升 PID 不受影响。
+ * 其余"动作"状态执行一个 VL53L0X API 调用；ST API 内部使用同步 I2C，
+ * 通信异常时可能阻塞至平台超时。因此仅允许用于主循环启动前或显式恢复。
  *
  * 流程：
  *   IDLE → XSHUT_LOW_WAIT(30ms) → XSHUT_HIGH_WAIT(30ms)
@@ -141,9 +140,7 @@ typedef struct {
   uint32_t transfer_started_ms;
   uint32_t measurement_started_ms;
   uint32_t sample_count_at_start;
-  uint32_t recovery_after_ms;           /* 下次可重试恢复的时刻 (HAL_GetTick) */
-  uint32_t recovery_backoff_ms;         /* 当前退避间隔，指数增长，最大 60s */
-  /* ---- 恢复状态机（非阻塞） ---- */
+  /* ---- 开机/显式恢复状态机 ---- */
   tof200c_recovery_step_t recovery_step;/* 当前恢复步骤（IDLE = 未在恢复） */
   uint32_t recovery_step_start_ms;      /* 当前步骤开始时刻 */
   bool recovery_is_light;               /* true=轻量恢复跳过SPAD校准, false=全量 */
@@ -178,16 +175,16 @@ tof200c_status_t tof200c_get_latest(const tof200c_t *device,
                                     tof200c_feedback_t *feedback);
 
 /**
- * Normal operation and recovery are non-blocking. The sensor start
- * sequence is split into discrete steps driven by repeated calls from
- * the main loop. No step blocks for more than ~10 ms in the light
- * recovery path.
- * Call this function continuously from the main loop.
+ * Normal online operation uses interrupt-driven I2C and is non-blocking.
+ * Once the device becomes offline, this function leaves it offline and
+ * does not start automatic recovery from the main loop.
  */
 void tof200c_process(tof200c_t *device);
 
 /**
- * Blocking explicit recovery and shutdown operations.
+ * Blocking explicit recovery and shutdown operations. The application does
+ * not call tof200c_recover() automatically; normal recovery therefore needs
+ * a controller restart unless a higher layer explicitly requests it.
  */
 tof200c_status_t tof200c_recover(tof200c_t *device);
 tof200c_status_t tof200c_deinit(tof200c_t *device);
