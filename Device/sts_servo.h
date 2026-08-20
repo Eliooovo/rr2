@@ -29,6 +29,7 @@ typedef enum {
 typedef struct {
     UART_HandleTypeDef *huart; /**< HAL UART 句柄。                  */
     uint8_t             id;    /**< 舵机总线 ID，有效范围 1~253。     */
+    uint32_t            offline_timeout_ms; /**< 反馈超时离线时间 [ms]。 */
 } sts_servo_config_t;
 
 /** 舵机反馈数据，由 get_feedback 填充。 */
@@ -36,8 +37,10 @@ typedef struct {
     float   pos_rad;        /**< 当前位置 [rad]，范围 0 ~ 2π。       */
     float   speed_rad_s;    /**< 当前速度 [rad/s]。                  */
     int16_t load;           /**< 当前负载（原始值）。                 */
+    int16_t current_raw;    /**< 当前电流（原始值）。                 */
     uint8_t voltage_x10;    /**< 供电电压 [0.1 V]。                  */
     uint8_t temperature_c;  /**< 内部温度 [°C]。                      */
+    uint8_t status;         /**< 舵机硬件错误状态字（寄存器 65）。 */
     uint8_t moving;         /**< 运动标志，1 表示正在运动。           */
 } sts_servo_feedback_t;
 
@@ -136,7 +139,8 @@ sts_servo_status_t sts_servo_get_feedback(sts_servo_t *servo,
 /**
  * @brief 周期更新在线状态。
  *
- * 调用方应以不慢于离线超时周期（如 100 ms）的频率调用。
+ * 根据最近一次成功反馈时间更新在线状态。调用方应以不慢于
+ * config.offline_timeout_ms 的频率调用。本函数不刷新成功反馈时间。
  *
  * @param servo 舵机对象指针。
  * @param now_ms HAL_GetTick() 返回值。

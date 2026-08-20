@@ -26,6 +26,12 @@ extern "C" {
 #define WEAPON_GRIP_APP_FEEDBACK_PERIOD_MS 20U
 /* 舵机反馈超时判定离线的时间，单位 ms。必须大于 CONTROL_PERIOD_MS。 */
 #define WEAPON_GRIP_APP_OFFLINE_TIMEOUT_MS 200U
+/*
+ * 目标未到且已停止时，等待舵机内部堵转保护完成后重发一次。
+ * 必须大于舵机默认 2 s 堵转保护时间，且每个目标最多自动恢复一次。
+ */
+#define WEAPON_GRIP_APP_RECOVERY_DELAY_MS  2500U
+#define WEAPON_GRIP_APP_POSITION_TOLERANCE_RAW 32U
 /* 夹爪闭合位置对应的 raw 值（全开=2048，闭合=+90°=3072）。 */
 #define WEAPON_GRIP_APP_CENTER_RAW         3072
 /*

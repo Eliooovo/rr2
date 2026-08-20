@@ -22,6 +22,7 @@
 #include "SMS_STS.h"
 
 #define STS_SERVO_UART_TX_TIMEOUT_MS 5U
+#define STS_SERVO_UART_RX_TIMEOUT_MS 5U
 
 /* ========================================================================
  * 硬件抽象层 —— 供 SCSLib 全局调用
@@ -33,6 +34,9 @@ static UART_HandleTypeDef *g_huart;
 /** 发送缓冲，供 writeSCS / writeByteSCS 逐字节累积。 */
 static uint8_t g_tx_buf[128];
 static uint8_t g_tx_len;
+static volatile uint32_t s_uart_rx_error_count;
+static volatile HAL_StatusTypeDef s_last_uart_rx_status = HAL_OK;
+static volatile uint32_t s_last_uart_rx_error_code = HAL_UART_ERROR_NONE;
 static volatile uint32_t s_uart_tx_error_count;
 static volatile HAL_StatusTypeDef s_last_uart_tx_status = HAL_OK;
 
@@ -42,9 +46,16 @@ static volatile HAL_StatusTypeDef s_last_uart_tx_status = HAL_OK;
  */
 int readSCS(uint8_t *nDat, int nLen)
 {
-    if (HAL_OK != HAL_UART_Receive(g_huart, nDat, nLen, 5)) {
+    s_last_uart_rx_status = HAL_UART_Receive(g_huart,
+                                             nDat,
+                                             nLen,
+                                             STS_SERVO_UART_RX_TIMEOUT_MS);
+    if (s_last_uart_rx_status != HAL_OK) {
+        s_last_uart_rx_error_code = g_huart->ErrorCode;
+        s_uart_rx_error_count++;
         return 0;
     }
+    s_last_uart_rx_error_code = HAL_UART_ERROR_NONE;
     return nLen;
 }
 
@@ -78,11 +89,18 @@ int writeByteSCS(unsigned char bDat)
 }
 
 /**
- * @brief 全双工模式下无需方向切换，空操作。
+ * @brief 清除上一次事务残留的接收数据和 UART 错误。
  */
 void rFlushSCS(void)
 {
-    /* 全双工接线，TX / RX 独立，无需延时切换方向。 */
+    if (g_huart == NULL) {
+        return;
+    }
+
+    __HAL_UART_CLEAR_FLAG(g_huart,
+                          UART_CLEAR_PEF | UART_CLEAR_FEF |
+                          UART_CLEAR_NEF | UART_CLEAR_OREF);
+    __HAL_UART_SEND_REQ(g_huart, UART_RXDATA_FLUSH_REQUEST);
 }
 
 /**
@@ -147,6 +165,9 @@ sts_servo_status_t sts_servo_init(sts_servo_t *servo)
     if (servo->config.id == 0 || servo->config.id > 253) {
         return STS_SERVO_ERROR_CONFIG;
     }
+    if (servo->config.offline_timeout_ms == 0U) {
+        return STS_SERVO_ERROR_CONFIG;
+    }
 
     /* 设置全局 UART 句柄，供硬件抽象层使用。 */
     g_huart = servo->config.huart;
@@ -168,7 +189,8 @@ sts_servo_status_t sts_servo_init(sts_servo_t *servo)
         return STS_SERVO_ERROR_TIMEOUT;
     }
 
-    servo->state.online     = 1;
+    servo->internal.last_update_ms = HAL_GetTick();
+    servo->state.online = 1U;
     servo->internal.initialized = 1;
     return STS_SERVO_OK;
 }
@@ -266,16 +288,21 @@ sts_servo_status_t sts_servo_get_feedback(sts_servo_t *servo,
     int16_t pos_raw   = (int16_t)SCS2Host(buf[0], buf[1]);
     int16_t speed_raw = (int16_t)SCS2Host(buf[2], buf[3]);
     int16_t load_raw  = (int16_t)SCS2Host(buf[4], buf[5]);
+    int16_t current_raw = (int16_t)SCS2Host(buf[13], buf[14]);
 
     fb->pos_rad        = raw_to_rad(pos_raw);
     fb->speed_rad_s    = (float)speed_raw * 2.0f * (float)M_PI / 60.0f;
     fb->load           = load_raw;
+    fb->current_raw    = current_raw;
     fb->voltage_x10    = buf[6];
     fb->temperature_c  = buf[7];
+    fb->status         = buf[9];
     fb->moving         = buf[10];
 
     /* 同步写入对象内部 feedback。 */
     memcpy(&servo->feedback, fb, sizeof(*fb));
+    servo->internal.last_update_ms = HAL_GetTick();
+    servo->state.online = 1U;
 
     return STS_SERVO_OK;
 }
@@ -286,7 +313,7 @@ sts_servo_status_t sts_servo_update(sts_servo_t *servo, uint32_t now_ms)
         return STS_SERVO_ERROR_NOT_INIT;
     }
 
-    /* 100 ms 无更新则标记离线。 */
+    /* 从最近一次成功通信起超时才标记离线。 */
     uint32_t elapsed;
     if (now_ms >= servo->internal.last_update_ms) {
         elapsed = now_ms - servo->internal.last_update_ms;
@@ -295,10 +322,9 @@ sts_servo_status_t sts_servo_update(sts_servo_t *servo, uint32_t now_ms)
         elapsed = (0xFFFFFFFFUL - servo->internal.last_update_ms) + now_ms + 1;
     }
 
-    if (elapsed > 100U) {
+    if (elapsed >= servo->config.offline_timeout_ms) {
         servo->state.online = 0;
     }
 
-    servo->internal.last_update_ms = now_ms;
     return STS_SERVO_OK;
 }

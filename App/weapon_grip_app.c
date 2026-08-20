@@ -26,9 +26,14 @@ static int16_t s_target_position_raw;
 static uint32_t s_last_command_sequence;
 static uint32_t s_last_ctrl_ms;
 static uint32_t s_last_feedback_ms;
+static uint32_t s_position_command_error_count;
+static uint32_t s_position_recovery_count;
+static uint32_t s_target_applied_ms;
+static sts_servo_status_t s_last_position_command_status;
 static uint8_t s_initialized;
 static uint8_t s_target_received;
 static uint8_t s_target_applied;
+static uint8_t s_recovery_attempted;
 
 /* ---- 辅助函数 ---- */
 
@@ -76,11 +81,10 @@ static float WeaponGripApp_ServoRawToMeters(int16_t raw)
            WEAPON_GRIP_APP_RAW_PER_METER;
 }
 
-static uint8_t WeaponGripApp_FeedbackIsRecent(uint32_t now_ms)
+static int16_t WeaponGripApp_FeedbackRaw(void)
 {
-    return (s_servo.state.online != 0U &&
-            (uint32_t)(now_ms - s_servo.internal.last_update_ms) <
-                WEAPON_GRIP_APP_OFFLINE_TIMEOUT_MS) ? 1U : 0U;
+    return (int16_t)(s_servo.feedback.pos_rad * 4096.0f /
+                     (2.0f * M_PI));
 }
 
 /* 检查上位机新命令：sequence 递增说明收到新帧，更新目标。 */
@@ -108,19 +112,20 @@ static void WeaponGripApp_UpdateTargetFromCommand(void)
             target_raw != s_target_position_raw) {
             s_target_position_raw = target_raw;
             s_target_applied = 0U;
+            s_recovery_attempted = 0U;
         }
         s_target_received = 1U;
     }
 }
 
-static void WeaponGripApp_UpdateFeedback(uint32_t now_ms)
+static void WeaponGripApp_UpdateFeedback(void)
 {
     sts_servo_feedback_t fb;
     float position_m;
 
-    if (WeaponGripApp_FeedbackIsRecent(now_ms) == 0U ||
-        sts_servo_get_feedback(&s_servo, &fb) != STS_SERVO_OK) {
-        WeaponGripApp_ClearFeedback();
+    /* 离线时仍持续读取，使通信恢复后能自动重新上线。 */
+    if (sts_servo_get_feedback(&s_servo, &fb) != STS_SERVO_OK) {
+        /* 短暂丢包保留上一帧，超时由周期函数统一清除。 */
         return;
     }
 
@@ -164,6 +169,7 @@ void WeaponGripApp_Init(void)
     /* 硬件通信配置由 CubeMX/UART7 负责，这里只注册 STS 舵机实例。 */
     s_servo.config.huart = &huart7;
     s_servo.config.id = 6U;
+    s_servo.config.offline_timeout_ms = WEAPON_GRIP_APP_OFFLINE_TIMEOUT_MS;
 
     status = sts_servo_init(&s_servo);
     if (status != STS_SERVO_OK) {
@@ -180,8 +186,13 @@ void WeaponGripApp_Init(void)
     s_target_position_raw = (int16_t)WEAPON_GRIP_APP_CENTER_RAW;
     s_last_command_sequence = 0U;
     s_last_ctrl_ms = 0U;
+    s_position_command_error_count = 0U;
+    s_position_recovery_count = 0U;
+    s_target_applied_ms = 0U;
+    s_last_position_command_status = STS_SERVO_OK;
     s_target_received = 0U;
     s_target_applied = 0U;
+    s_recovery_attempted = 0U;
     s_initialized = 1U;
 }
 
@@ -199,12 +210,16 @@ void WeaponGripApp_RunPeriodic(void)
     /* 1. 更新反馈到上位机邮箱（限速以减少 UART 阻塞）。 */
     if ((uint32_t)(now_ms - s_last_feedback_ms) >=
         WEAPON_GRIP_APP_FEEDBACK_PERIOD_MS) {
-      WeaponGripApp_UpdateFeedback(now_ms);
-      s_last_feedback_ms = now_ms;
+        WeaponGripApp_UpdateFeedback();
+        s_last_feedback_ms = now_ms;
     }
 
     /* 2. 更新舵机在线状态。 */
-    sts_servo_update(&s_servo, now_ms);
+    /* UART 读取可能跨 tick，在读取完成后重新取时间判定超时。 */
+    sts_servo_update(&s_servo, HAL_GetTick());
+    if (s_servo.state.online == 0U) {
+        WeaponGripApp_ClearFeedback();
+    }
 
     /* 3. 按周期检查命令、下发位置。 */
     if ((uint32_t)(now_ms - s_last_ctrl_ms) <
@@ -228,19 +243,44 @@ void WeaponGripApp_RunPeriodic(void)
      * 例外：目标变化 (target_applied=0) 时必须重新下发。
      */
     if (s_target_applied != 0U && s_servo.state.online != 0U) {
-        return;
+        int32_t error_raw = (int32_t)s_target_position_raw -
+                            (int32_t)WeaponGripApp_FeedbackRaw();
+
+        if (error_raw < 0) {
+            error_raw = -error_raw;
+        }
+
+        if (s_recovery_attempted == 0U &&
+            s_servo.feedback.moving == 0U &&
+            (uint32_t)error_raw > WEAPON_GRIP_APP_POSITION_TOLERANCE_RAW &&
+            (uint32_t)(now_ms - s_target_applied_ms) >=
+                WEAPON_GRIP_APP_RECOVERY_DELAY_MS) {
+            /* 只重发一次以清除舵机内部堵转保护，避免持续顶机构。 */
+            s_recovery_attempted = 1U;
+            s_position_recovery_count++;
+            s_target_applied = 0U;
+        } else {
+            return;
+        }
     }
 
     /*
      * 舵机位置控制：直接写 raw 目标值。
      */
-    if (sts_servo_set_position_raw(
-            &s_servo,
-            s_target_position_raw,
-            WEAPON_GRIP_APP_MOVE_SPEED,
-            WEAPON_GRIP_APP_MOVE_ACC) != STS_SERVO_OK) {
-        WeaponGripApp_FailAndDisable();
+    s_last_position_command_status = sts_servo_set_position_raw(
+        &s_servo,
+        s_target_position_raw,
+        WEAPON_GRIP_APP_MOVE_SPEED,
+        WEAPON_GRIP_APP_MOVE_ACC);
+    if (s_last_position_command_status != STS_SERVO_OK) {
+        /*
+         * 位置写入的应答丢失是可恢复的通信故障。保留扭矩使能和
+         * 当前安全位置，下一个控制周期重试，避免因一次 ORE/超时永久失能。
+         */
+        s_position_command_error_count++;
+        s_target_applied = 0U;
         return;
     }
     s_target_applied = 1U;
+    s_target_applied_ms = HAL_GetTick();
 }
