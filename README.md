@@ -51,11 +51,17 @@ is now only a compatibility forwarder from `Comm_OnUsbReceived()` to
 
 ## Command and feedback protocol
 
-Each frame is fixed at 58 bytes:
+Command frames are fixed at 58 bytes; feedback frames are fixed at 59 bytes
+(one extra key byte inserted before the tail `0x55`):
 
 ```text
-0xAA + 14 x IEEE-754 float32 little-endian + 0x55
+command : 0xAA + 14 x IEEE-754 float32 little-endian + 0x55                 (58 bytes)
+feedback: 0xAA + 14 x IEEE-754 float32 little-endian + key(1 byte) + 0x55   (59 bytes)
 ```
+
+The key byte (feedback, second-to-last byte) is the PA15 button state: `1` =
+pressed, `0` = released. PA15 is a pull-up input and the firmware inverts the
+raw level.
 
 Field order:
 
@@ -92,8 +98,8 @@ difference method, no time dependence). The pose is anchored at power-on
 
 This is a breaking protocol change: command frames must also carry 14 floats
 (fields 12-14 are currently ignored by the firmware, send zeros). Host PC
-software must be updated to the 58-byte frame, otherwise command frames no
-longer parse.
+software must be updated to the 58-byte command frame and the 59-byte feedback
+frame, otherwise frames no longer parse.
 
 The latest valid command is retained indefinitely; there is currently no
 command timeout. A lift command received before a motor becomes online is

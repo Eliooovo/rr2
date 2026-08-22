@@ -33,6 +33,7 @@
 #include "kfs_lift_app.h"
 #include "kfs_rotate_app.h"
 #include "kfs_grip_app.h"
+#include "key_app.h"
 #include "lift_app.h"
 #include "weapon_rotate_app.h"
 #include "weapon_grip_app.h"
@@ -127,6 +128,7 @@ int main(void)
   KfsRotateApp_Init();
   KfsGripApp_Init();
   WeaponRotateApp_Init();
+  KeyApp_Init();
   CommApp_Init();
   WeaponGripApp_Init();
   Tof200cApp_Init();
@@ -145,6 +147,7 @@ int main(void)
     // HAL_GPIO_TogglePin(LED2_GPIO_Port, LED2_Pin);  // 翻转 LED2
     // HAL_Delay(500);  // 等 500ms
 
+    KeyApp_RunPeriodic();
     CommApp_RunPeriodic();
     RcControl_RunPeriodic();
     ChassisApp_RunPeriodic();

@@ -28,6 +28,8 @@ add_executable(${CMAKE_PROJECT_NAME}
     App/kfs_rotate_app.h
     App/kfs_grip_app.c
     App/kfs_grip_app.h
+    App/key_app.c
+    App/key_app.h
     App/weapon_rotate_app.c
     App/weapon_rotate_app.h
     App/weapon_grip_app.c
@@ -44,6 +46,8 @@ add_executable(${CMAKE_PROJECT_NAME}
     Device/dji_motor.h
     Device/dji_motor_group.c
     Device/dji_motor_group.h
+    Device/key.c
+    Device/key.h
     Device/rs_motor/rs_motor.c
     Device/rs_motor/rs_motor.h
     Device/sts_servo.c

@@ -7,18 +7,21 @@
 
 #include <string.h>
 
+#include "key_app.h"
 #include "main.h"
 #include "usbd_cdc_if.h"
 
 #define COMM_APP_FLOAT_COUNT   14U
-#define COMM_APP_PACKET_SIZE   (1U + COMM_APP_FLOAT_COUNT * 4U + 1U)
+#define COMM_APP_CMD_PACKET_SIZE      (1U + COMM_APP_FLOAT_COUNT * 4U + 1U)   /* 命令帧 58 字节 */
+#define COMM_APP_FEEDBACK_PACKET_SIZE (COMM_APP_CMD_PACKET_SIZE + 1U)         /* 反馈帧 59 字节 */
+#define COMM_APP_FEEDBACK_KEY_INDEX   (1U + COMM_APP_FLOAT_COUNT * 4U)        /* 按键字节下标 (0x55 之前) */
 #define COMM_APP_COMMAND_HEAD  0xAAU
 #define COMM_APP_COMMAND_TAIL  0x55U
 #define COMM_APP_FEEDBACK_HEAD 0xAAU
 #define COMM_APP_FEEDBACK_TAIL 0x55U
 #define COMM_APP_TX_BUFFER_COUNT 2U
 
-#if COMM_APP_RX_BUFFER_SIZE <= COMM_APP_PACKET_SIZE
+#if COMM_APP_RX_BUFFER_SIZE <= COMM_APP_CMD_PACKET_SIZE
 #error "COMM_APP_RX_BUFFER_SIZE must be larger than one complete packet"
 #endif
 
@@ -28,10 +31,10 @@ volatile comm_app_feedback_t g_comm_app_feedback;
 static volatile uint16_t s_rx_head;
 static volatile uint16_t s_rx_tail;
 static uint8_t s_rx_buffer[COMM_APP_RX_BUFFER_SIZE];
-static uint8_t s_parse_buffer[COMM_APP_PACKET_SIZE];
+static uint8_t s_parse_buffer[COMM_APP_CMD_PACKET_SIZE];
 static uint16_t s_parse_index;
 static uint8_t
-    s_feedback_packet[COMM_APP_TX_BUFFER_COUNT][COMM_APP_PACKET_SIZE];
+    s_feedback_packet[COMM_APP_TX_BUFFER_COUNT][COMM_APP_FEEDBACK_PACKET_SIZE];
 static uint8_t s_active_tx_buffer;
 static uint32_t s_last_feedback_ms;
 
@@ -90,7 +93,7 @@ static void CommApp_WriteFloatLe(uint8_t data[4], float value)
 }
 
 static void CommApp_UnpackCommand(
-    const uint8_t packet[COMM_APP_PACKET_SIZE])
+    const uint8_t packet[COMM_APP_CMD_PACKET_SIZE])
 {
     float fields[COMM_APP_FLOAT_COUNT];
     uint32_t next_sequence = g_comm_app_command.sequence + 1U;
@@ -128,9 +131,9 @@ static void CommApp_ParseRx(void)
         s_parse_buffer[s_parse_index] = byte;
         s_parse_index++;
 
-        if (s_parse_index >= COMM_APP_PACKET_SIZE) {
+        if (s_parse_index >= COMM_APP_CMD_PACKET_SIZE) {
             if (s_parse_buffer[0] == COMM_APP_COMMAND_HEAD &&
-                s_parse_buffer[COMM_APP_PACKET_SIZE - 1U] ==
+                s_parse_buffer[COMM_APP_CMD_PACKET_SIZE - 1U] ==
                     COMM_APP_COMMAND_TAIL) {
                 CommApp_UnpackCommand(s_parse_buffer);
             }
@@ -140,7 +143,7 @@ static void CommApp_ParseRx(void)
 }
 
 static void CommApp_PackFeedback(
-    uint8_t packet[COMM_APP_PACKET_SIZE])
+    uint8_t packet[COMM_APP_FEEDBACK_PACKET_SIZE])
 {
     float fields[COMM_APP_FLOAT_COUNT] = {0.0f};
 
@@ -180,7 +183,8 @@ static void CommApp_PackFeedback(
         CommApp_WriteFloatLe(&packet[1U + (uint16_t)i * 4U],
                              fields[i]);
     }
-    packet[COMM_APP_PACKET_SIZE - 1U] = COMM_APP_FEEDBACK_TAIL;
+    packet[COMM_APP_FEEDBACK_KEY_INDEX] = KeyApp_GetValue();      /* 按键字节: 1=按下, 0=松开 */
+    packet[COMM_APP_FEEDBACK_PACKET_SIZE - 1U] = COMM_APP_FEEDBACK_TAIL;
 }
 
 static void CommApp_SendFeedbackPeriodic(void)
@@ -198,7 +202,7 @@ static void CommApp_SendFeedbackPeriodic(void)
                   COMM_APP_TX_BUFFER_COUNT);
     CommApp_PackFeedback(s_feedback_packet[next_tx_buffer]);
     if (CDC_Transmit_HS(s_feedback_packet[next_tx_buffer],
-                        COMM_APP_PACKET_SIZE) == USBD_OK) {
+                        COMM_APP_FEEDBACK_PACKET_SIZE) == USBD_OK) {
         s_active_tx_buffer = next_tx_buffer;
         s_last_feedback_ms = now_ms;
     }
