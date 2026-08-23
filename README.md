@@ -51,11 +51,11 @@ is now only a compatibility forwarder from `Comm_OnUsbReceived()` to
 
 ## Command and feedback protocol
 
-Command frames are fixed at 58 bytes; feedback frames are fixed at 59 bytes
-(one extra key byte inserted before the tail `0x55`):
+Command frames are fixed at 46 bytes (11 floats); feedback frames are fixed at
+59 bytes (14 floats plus one key byte inserted before the tail `0x55`):
 
 ```text
-command : 0xAA + 14 x IEEE-754 float32 little-endian + 0x55                 (58 bytes)
+command : 0xAA + 11 x IEEE-754 float32 little-endian + 0x55                 (46 bytes)
 feedback: 0xAA + 14 x IEEE-754 float32 little-endian + key(1 byte) + 0x55   (59 bytes)
 ```
 
@@ -63,7 +63,8 @@ The key byte (feedback, second-to-last byte) is the PA15 button state: `1` =
 pressed, `0` = released. PA15 is a pull-up input and the firmware inverts the
 raw level.
 
-Field order:
+Field order (the command frame carries fields 1-11; the feedback frame appends
+the odometry fields 12-14):
 
 1. chassis `vx` in m/s
 2. chassis `vy` in m/s
@@ -76,15 +77,15 @@ Field order:
 9. kfs grip position in m
 10. weapon rotation in rad
 11. weapon grip position in m
-12. chassis odometry X in m
-13. chassis odometry Y in m
-14. chassis odometry yaw in rad (continuous, unwrapped)
+12. chassis odometry X in m (feedback only)
+13. chassis odometry Y in m (feedback only)
+14. chassis odometry yaw in rad (continuous, unwrapped; feedback only)
 
-The feedback frame uses the same order. Chassis velocity fields are calculated
-from all four actual motor speeds; lift fields are the actual average
-continuous positions of the front and rear motor pairs. If a subsystem is not
-ready or has an offline motor, that subsystem's feedback fields are sent as
-zero.
+The feedback frame uses the same order plus the odometry fields. Chassis
+velocity fields are calculated from all four actual motor speeds; lift fields
+are the actual average continuous positions of the front and rear motor pairs.
+If a subsystem is not ready or has an offline motor, that subsystem's feedback
+fields are sent as zero.
 
 The odometry pose (fields 12-14) is integrated from per-tick deltas of each
 wheel's continuous multi-turn encoder count, converted to wheel displacement
@@ -96,10 +97,9 @@ difference method, no time dependence). The pose is anchored at power-on
 复位机制；电机离线时内部位姿冻结不清零，但帧内字段随 `chassis_valid=0`
 发 0，恢复后从冻结值继续积分。
 
-This is a breaking protocol change: command frames must also carry 14 floats
-(fields 12-14 are currently ignored by the firmware, send zeros). Host PC
-software must be updated to the 58-byte command frame and the 59-byte feedback
-frame, otherwise frames no longer parse.
+The command frame carries 11 floats; the odometry fields 12-14 appear only in
+the feedback frame. Host PC software must send the 46-byte command frame and
+parse the 59-byte feedback frame, otherwise frames no longer parse.
 
 The latest valid command is retained indefinitely; there is currently no
 command timeout. A lift command received before a motor becomes online is

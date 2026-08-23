@@ -11,10 +11,11 @@
 #include "main.h"
 #include "usbd_cdc_if.h"
 
-#define COMM_APP_FLOAT_COUNT   14U
-#define COMM_APP_CMD_PACKET_SIZE      (1U + COMM_APP_FLOAT_COUNT * 4U + 1U)   /* 命令帧 58 字节 */
-#define COMM_APP_FEEDBACK_PACKET_SIZE (COMM_APP_CMD_PACKET_SIZE + 1U)         /* 反馈帧 59 字节 */
-#define COMM_APP_FEEDBACK_KEY_INDEX   (1U + COMM_APP_FLOAT_COUNT * 4U)        /* 按键字节下标 (0x55 之前) */
+#define COMM_APP_CMD_FLOAT_COUNT      11U
+#define COMM_APP_FEEDBACK_FLOAT_COUNT 14U
+#define COMM_APP_CMD_PACKET_SIZE      (1U + COMM_APP_CMD_FLOAT_COUNT * 4U + 1U)            /* 命令帧 46 字节 */
+#define COMM_APP_FEEDBACK_PACKET_SIZE (1U + COMM_APP_FEEDBACK_FLOAT_COUNT * 4U + 1U + 1U) /* 反馈帧 59 字节 */
+#define COMM_APP_FEEDBACK_KEY_INDEX   (1U + COMM_APP_FEEDBACK_FLOAT_COUNT * 4U)           /* 按键字节下标 (0x55 之前) */
 #define COMM_APP_COMMAND_HEAD  0xAAU
 #define COMM_APP_COMMAND_TAIL  0x55U
 #define COMM_APP_FEEDBACK_HEAD 0xAAU
@@ -95,10 +96,10 @@ static void CommApp_WriteFloatLe(uint8_t data[4], float value)
 static void CommApp_UnpackCommand(
     const uint8_t packet[COMM_APP_CMD_PACKET_SIZE])
 {
-    float fields[COMM_APP_FLOAT_COUNT];
+    float fields[COMM_APP_CMD_FLOAT_COUNT];
     uint32_t next_sequence = g_comm_app_command.sequence + 1U;
 
-    for (uint8_t i = 0U; i < COMM_APP_FLOAT_COUNT; ++i) {
+    for (uint8_t i = 0U; i < COMM_APP_CMD_FLOAT_COUNT; ++i) {
         fields[i] =
             CommApp_ReadFloatLe(&packet[1U + (uint16_t)i * 4U]);
     }
@@ -145,7 +146,7 @@ static void CommApp_ParseRx(void)
 static void CommApp_PackFeedback(
     uint8_t packet[COMM_APP_FEEDBACK_PACKET_SIZE])
 {
-    float fields[COMM_APP_FLOAT_COUNT] = {0.0f};
+    float fields[COMM_APP_FEEDBACK_FLOAT_COUNT] = {0.0f};
 
     if (g_comm_app_feedback.chassis_valid != 0U) {
         fields[0] = g_comm_app_feedback.chassis_vx_m_s;
@@ -179,7 +180,7 @@ static void CommApp_PackFeedback(
     }
 
     packet[0] = COMM_APP_FEEDBACK_HEAD;
-    for (uint8_t i = 0U; i < COMM_APP_FLOAT_COUNT; ++i) {
+    for (uint8_t i = 0U; i < COMM_APP_FEEDBACK_FLOAT_COUNT; ++i) {
         CommApp_WriteFloatLe(&packet[1U + (uint16_t)i * 4U],
                              fields[i]);
     }
